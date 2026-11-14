@@ -1,0 +1,7 @@
+# Tk's C style: indentation in steps of 4 columns, tab stops every 8.
+
+root = true
+
+[*.{c,h,m}]
+indent_size = 4
+tab_width = 8
