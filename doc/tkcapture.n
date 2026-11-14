@@ -1,0 +1,396 @@
+'\"
+'\" tkcapture.n --
+'\"
+'\"	Manual page of the tkcapture package.
+'\"
+'\" Copyright (c) 2026 Bandoti Ltd.
+'\"
+'\" See the file "license.terms" for information on usage and redistribution
+'\" of this file, and for a DISCLAIMER OF ALL WARRANTIES.
+'\"
+.TH tkcapture n 1.0 tkcapture "Tk Extensions"
+.SH NAME
+tkcapture \- Capture Tk windows, widgets and regions into photo images
+.SH SYNOPSIS
+.nf
+\fBpackage require Tk 9.0\-\fR
+\fBpackage require tkcapture\fR ?\fB1.0\fR?
+
+\fBtkcapture::capture\fR \fIwindow\fR ?\fIoption value ...\fR?
+\fBtkcapture::save\fR \fIwindow fileName\fR ?\fB\-format\fR \fIformat\fR? ?\fIoption value ...\fR?
+\fBtkcapture::png\fR \fIwindow\fR ?\fIoption value ...\fR?
+\fBtkcapture::layout\fR \fIwindow\fR
+\fBtkcapture::locate\fR \fIimage x y\fR
+\fBtkcapture::pkgconfig\fR \fBlist\fR|\fBget\fR ?\fIkey\fR?
+.fi
+.SH DESCRIPTION
+.PP
+The \fBtkcapture\fR package takes pictures of the windows of the
+application that uses it.
+A picture can show a whole toplevel, a single widget or any rectangle,
+and is delivered as a Tk photo image, which can be displayed, compared,
+written to a file or converted to data in any format that photo images
+support.
+.PP
+Only windows of the calling application can be captured, without the
+decorations that the window manager adds.
+The package never reads the desktop or the windows of other
+applications, so it needs no special permission on any platform.
+.SH "CAPTURING"
+.TP
+\fBtkcapture::capture\fR \fIwindow\fR ?\fIoption value ...\fR?
+.
+Stores in a photo image what the toplevel of \fIwindow\fR displays in a
+rectangle of \fIwindow\fR, and returns the name of the image.
+By default the rectangle is the whole of \fIwindow\fR.
+.RS
+.PP
+The image holds the pixels that the toplevel shows in the rectangle:
+\fIwindow\fR itself, its descendants, and whatever else of the same
+toplevel is displayed there, such as a sibling placed on top of
+\fIwindow\fR.
+The pixels of a widget capture therefore equal the corresponding pixels
+of a capture of the whole toplevel.
+\fIWindow\fR must be viewable (see \fBwinfo viewable\fR).
+.PP
+The following options are supported; they can be abbreviated:
+.TP
+\fB\-photo \fIimageName\fR
+.
+The existing photo image that receives the capture.
+Its contents and size are replaced.
+If the option is absent or empty, a new photo image is created; the
+caller owns it and should delete it with \fBimage delete\fR when done.
+.TP
+\fB\-region\fR {\fIx1 y1 x2 y2\fR}
+.
+The rectangle to capture, in pixels in the coordinate system of
+\fIwindow\fR.
+\fIX1\fR and \fIy1\fR are the upper left corner; \fIx2\fR and \fIy2\fR
+are just outside the lower right corner, as in the \fB\-from\fR option of
+photo images.
+The rectangle may extend beyond \fIwindow\fR, for example to show a
+widget with some of its surroundings; it is clipped to the toplevel.
+It is an error if nothing remains.
+.TP
+\fB\-scale \fImode\fR
+.
+\fBlogical\fR, the default, yields one image pixel per Tk pixel, so that
+image coordinates are window coordinates.
+\fBdevice\fR yields one image pixel per pixel of the backing store,
+which gives a sharper image on a high-resolution (Retina) display on
+macOS and is the same as \fBlogical\fR elsewhere.
+.TP
+\fB\-update \fIboolean\fR
+.
+If true, the default, pending redraws and geometry changes are processed
+with \fBupdate idletasks\fR before the capture, so that the image shows
+the current state of the widgets.
+If reading the pixels makes the windowing system ask for parts of the
+window to be painted that never were (on Windows, parts that were off
+the screen when the window was shown), those parts are drawn the same
+way and the capture is repeated.
+Use false where the event loop must not be entered.
+.TP
+\fB\-menubar \fIboolean\fR
+.
+If true, and \fIwindow\fR is a toplevel with a menubar, the capturable
+area extends upwards over the menubar: the default rectangle includes
+it, and a \fB\-region\fR can reach it with negative y coordinates.
+The option has no effect on macOS, where the menubar is not part of the
+window.
+The default is false.
+.TP
+\fB\-nocomplain \fIboolean\fR
+.
+If false, the default, it is an error if not a single pixel of the
+rectangle could be obtained.
+If true, the result is an entirely transparent image in that case.
+.PP
+Pixels that could not be obtained are transparent; all others are
+opaque.
+On X11 without a compositing window manager that concerns the parts of
+a window that are off the screen or covered by another window.
+.PP
+A toplevel that is embedded in a container (see the \fB\-use\fR option
+of \fBtoplevel\fR) displays only what lies inside the container.
+The rectangle is clipped to that part.
+.PP
+The command merges two keys into the \fB\-metadata\fR dictionary of the
+image and leaves any other key alone.
+\fBDPI\fR is the resolution of the image in pixels per inch.
+\fBcapture\fR is a dictionary with these keys:
+.RS
+.TP 18
+\fBwindow\fR
+\fIWindow\fR.
+.TP 18
+\fBtoplevel\fR
+The toplevel of \fIwindow\fR.
+.TP 18
+\fBx\fR, \fBy\fR
+The position of the upper left image pixel in the coordinates of
+\fIwindow\fR.
+It differs from the requested corner if the rectangle was clipped.
+.TP 18
+\fBrootx\fR, \fBrooty\fR
+The same position in screen coordinates at the time of the capture.
+.TP 18
+\fBwidth\fR, \fBheight\fR
+The size of the captured rectangle in Tk pixels.
+.TP 18
+\fBscale\fR
+The number of image pixels per Tk pixel.
+.TP 18
+\fBcomplete\fR
+False if some pixels could not be obtained and are transparent.
+.TP 18
+\fBwindowingsystem\fR
+The result of \fBtk windowingsystem\fR.
+.TP 18
+\fBtime\fR
+The time of the capture as returned by \fBclock milliseconds\fR.
+.RE
+.PP
+The image pixel (\fIix\fR, \fIiy\fR) shows the point
+(\fBx\fR + \fIix\fR / \fBscale\fR, \fBy\fR + \fIiy\fR / \fBscale\fR) of
+\fIwindow\fR.
+.RE
+.SH "HELPERS"
+.TP
+\fBtkcapture::save\fR \fIwindow fileName\fR ?\fB\-format\fR \fIformat\fR? ?\fIoption value ...\fR?
+.
+Captures \fIwindow\fR with the given \fBtkcapture::capture\fR options,
+writes the image to the file \fIfileName\fR and returns \fIfileName\fR.
+The image file format is \fIformat\fR if given, otherwise it is derived
+from the extension of \fIfileName\fR, and it is \fBpng\fR for a name
+without extension.
+The image is deleted again unless it was given with \fB\-photo\fR.
+.TP
+\fBtkcapture::png\fR \fIwindow\fR ?\fIoption value ...\fR?
+.
+Captures \fIwindow\fR with the given \fBtkcapture::capture\fR options
+and returns the image as the bytes of a PNG file.
+The image is deleted again unless it was given with \fB\-photo\fR.
+.TP
+\fBtkcapture::layout\fR \fIwindow\fR
+.
+Returns a dictionary that describes \fIwindow\fR and its viewable
+descendants in the same toplevel.
+Each key is a window path name; its value is a dictionary with the keys
+\fBclass\fR, \fBx\fR, \fBy\fR, \fBwidth\fR and \fBheight\fR.
+The coordinates are relative to \fIwindow\fR: they are the pixel
+positions of the windows in a \fBlogical\fR capture of \fIwindow\fR.
+Parents precede their children, and siblings are listed in stacking
+order, lowest first, so where rectangles overlap the later entry is the
+one displayed on top.
+On X11 a menubar is displayed by a copy of its menu that Tk creates,
+with a path name such as \fB.#m\fR for the menu \fB.m\fR; that copy is
+listed, above the toplevel at a negative \fBy\fR.
+.TP
+\fBtkcapture::locate\fR \fIimage x y\fR
+.
+Finds the widget that the pixel (\fIx\fR, \fIy\fR) of a captured image
+shows, using the \fBcapture\fR metadata of \fIimage\fR and the current
+geometry of the windows.
+Returns a dictionary with the keys \fBwindow\fR, the topmost window of
+the captured toplevel at that point, and \fBx\fR and \fBy\fR, the point
+in the coordinates of that window; they can be passed to
+\fBevent generate\fR.
+The result is empty if the point lies outside the toplevel.
+.TP
+\fBtkcapture::pkgconfig list\fR
+.TP
+\fBtkcapture::pkgconfig get\fR \fIkey\fR
+.
+Reports how the package was built, as \fBtcl::pkgconfig\fR does for Tcl.
+The only key is \fBxcomposite\fR: 1 if the X11 backend reads toplevels
+through the X Composite extension, 0 otherwise.
+.SH "SAFE INTERPRETERS"
+.PP
+The package can be loaded into a safe interpreter that has Tk (see
+\fBsafe::loadTk\fR), either with \fBpackage require\fR, if the package
+is installed in a directory that the safe interpreter may read, or by
+the trusted interpreter.
+\fBtkcapture::capture\fR, \fBtkcapture::png\fR, \fBtkcapture::layout\fR
+and \fBtkcapture::locate\fR work there as described;
+\fBtkcapture::save\fR does not exist, because a safe interpreter may not
+write files.
+The trusted interpreter can fetch a picture as the result of
+\fBtkcapture::png\fR.
+.PP
+A safe interpreter can capture its own windows only, and of those only
+what lies inside the container in which its main window is embedded.
+The \fB\-menubar\fR option is ignored.
+If the container belongs to another application, capturing fails with
+the error code \fBTK CAPTURE UNSUPPORTED\fR.
+On X11 and Windows, pixels under a window of the trusted interpreter
+that covers the container are transparent.
+On macOS such a window is captured; an application that embeds a safe
+interpreter should not display its own widgets over the container there.
+.SH "ERRORS"
+.PP
+The commands set these error codes:
+.TP
+\fBTK LOOKUP WINDOW \fIname\fR
+\fIName\fR is not a window.
+.TP
+\fBTK LOOKUP PHOTO \fIname\fR
+The \fB\-photo\fR option names something that is not a photo image.
+.TP
+\fBTK CAPTURE UNMAPPED\fR
+The window is not viewable.
+.TP
+\fBTK CAPTURE ICONIFIED\fR
+The toplevel is iconified.
+.TP
+\fBTK CAPTURE REGION\fR
+The \fB\-region\fR option is not a list of four integers.
+.TP
+\fBTK CAPTURE EMPTY_REGION\fR
+Nothing remains of the region after clipping.
+.TP
+\fBTK CAPTURE OFFSCREEN\fR
+No pixel of the region could be obtained, typically because it is off
+the screen or covered, and \fB\-nocomplain\fR is false.
+.TP
+\fBTK CAPTURE MENUBAR\fR
+The \fB\-menubar\fR option is true and the window is not a toplevel.
+.TP
+\fBTK CAPTURE UNSUPPORTED\fR
+The window cannot be captured, for example because of its X visual, or
+in a safe interpreter because it is embedded in another application.
+.TP
+\fBTK CAPTURE FAILED\fR
+The window system did not deliver the contents of the window.
+.TP
+\fBTK CAPTURE NO_METADATA\fR
+The image given to \fBtkcapture::locate\fR was not filled by
+\fBtkcapture::capture\fR.
+.PP
+A capture that fails leaves no new image behind and does not change the
+image given with \fB\-photo\fR.
+.SH "PLATFORM NOTES"
+.TP
+\fBX11\fR
+.
+The contents are read back from the X server.
+Under a compositing window manager they come from the buffer in which
+it keeps the toplevel, so covered and off-screen parts are captured
+correctly.
+This needs the X Composite extension at build time (see
+\fBtkcapture::pkgconfig\fR); without it, only covering by other
+toplevels is handled.
+Without a compositing window manager, as under a bare Xvfb server, the
+server cannot deliver covered parts: they are transparent, as are parts
+that are off the screen, and the \fBcomplete\fR entry of the metadata
+is false then.
+A region that is entirely off the screen is an error unless
+\fB\-nocomplain\fR is true.
+Where the pixels come from the window rather than the compositing
+manager's buffer, a covering window makes its whole bounding rectangle
+transparent, even if it is shaped or partly transparent.
+Whether other toplevels can cover the window is decided by the owner
+of the \fB_NET_WM_CM_S\fIn\fR selection: a compositing manager that
+does not own it leads to more transparent pixels than necessary, and a
+client that owns it without compositing can make pixels of toplevels
+stacked over the window appear in the capture.
+.TP
+\fBWindows\fR
+.
+The desktop window manager delivers the window contents, also for
+covered and off-screen parts.
+Off-screen parts are drawn only when a capture asks for them; with
+\fB\-update 0\fR they may come out blank.
+This needs Windows 8.1 or later; on older systems the pixels are copied
+from the screen and are correct only where the window is not covered.
+The alpha channel of a translucent toplevel (\fBwm attributes \-alpha\fR)
+is ignored: the window is captured as if it were opaque.
+.TP
+\fBmacOS\fR
+.
+The pixels are copied from the bitmap that backs the window and are
+converted to the sRGB color space.
+Covered and off-screen parts are captured correctly.
+A window that Tk has not drawn, such as an override-redirect toplevel
+placed beyond every screen, has no pixels: the capture fails with
+\fBTK CAPTURE OFFSCREEN\fR unless \fB\-nocomplain\fR is true.
+Tk draws all windows of a toplevel into the same bitmap, so widgets of
+the application stacked over an embedded toplevel are captured with it
+rather than made transparent (see \fBSAFE INTERPRETERS\fR).
+.SH "USAGE NOTES"
+.PP
+A toplevel that has just been created is not displayed until the window
+manager has mapped it, which takes more than \fBupdate idletasks\fR.
+Wait for it, for example with \fBtkwait visibility\fR or \fBupdate\fR,
+before capturing; otherwise the capture fails with
+\fBTK CAPTURE UNMAPPED\fR.
+Some window managers also map a new window off screen and move it into
+place a moment later.
+Without a compositing window manager, a capture taken in between fails
+with \fBTK CAPTURE OFFSCREEN\fR and can be repeated after \fBupdate\fR.
+.PP
+A capture with \fB\-update\fR true inside a binding for
+\fB<Configure>\fR or \fB<Expose>\fR can run the idle work of that same
+binding again; use \fB\-update 0\fR there.
+.PP
+The package does not add a \fBcapture\fR subcommand to the \fBtk\fR
+command.
+An application that wants one can add it:
+.RS
+.nf
+namespace ensemble configure tk \-map [dict merge \e
+    [namespace ensemble configure tk \-map] \e
+    {capture ::tkcapture::capture}]
+.fi
+.RE
+.SH EXAMPLES
+.PP
+Save a whole window, one widget, and a widget with eight pixels of
+context around it:
+.RS
+.nf
+package require tkcapture
+
+tkcapture::save . main.png
+tkcapture::save .toolbar toolbar.png
+
+set w [winfo width .f.ok]
+set h [winfo height .f.ok]
+tkcapture::save .f.ok ok.png \e
+    \-region [list \-8 \-8 [expr {$w + 8}] [expr {$h + 8}]]
+.fi
+.RE
+.PP
+Reuse one photo image for many captures:
+.RS
+.nf
+image create photo snap
+foreach page [.nb tabs] {
+    .nb select $page
+    tkcapture::capture $page \-photo snap
+    snap write [winfo name $page].png \-format png
+}
+.fi
+.RE
+.PP
+Click on the widget shown at pixel (212, 40) of a capture:
+.RS
+.nf
+set img [tkcapture::capture .]
+set hit [tkcapture::locate $img 212 40]
+if {[dict size $hit]} {
+    dict with hit {
+        event generate $window <Button\-1> \-x $x \-y $y
+        event generate $window <ButtonRelease\-1> \-x $x \-y $y
+    }
+}
+.fi
+.RE
+.SH "SEE ALSO"
+photo(n), image(n), winfo(n), update(n), tkwait(n), safe(n)
+.SH KEYWORDS
+capture, image, photo, screenshot, window
+'\" Local Variables:
+'\" mode: nroff
+'\" End:

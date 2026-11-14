@@ -1,0 +1,264 @@
+# Makefile.in --
+#
+#	TEA makefile for the tkcapture extension.  Processed by configure
+#	into Makefile; build out of tree (for example in build/<version>).
+
+#========================================================================
+# Files
+#========================================================================
+
+PKG_SOURCES	= @PKG_SOURCES@
+PKG_OBJECTS	= @PKG_OBJECTS@
+PKG_TCL_SOURCES = @PKG_TCL_SOURCES@
+PKG_HEADERS	= @PKG_HEADERS@
+
+PKG_LIB_FILE	= @PKG_LIB_FILE@
+PKG_LIB_FILE8	= @PKG_LIB_FILE8@
+PKG_LIB_FILE9	= @PKG_LIB_FILE9@
+
+lib_BINARIES	= $(PKG_LIB_FILE)
+BINARIES	= $(lib_BINARIES)
+
+SHELL		= @SHELL@
+
+srcdir		= @srcdir@
+prefix		= @prefix@
+exec_prefix	= @exec_prefix@
+
+bindir		= @bindir@
+libdir		= @libdir@
+includedir	= @includedir@
+datarootdir	= @datarootdir@
+runstatedir	= @runstatedir@
+datadir		= @datadir@
+mandir		= @mandir@
+
+DESTDIR		=
+
+PKG_DIR		= $(PACKAGE_NAME)$(PACKAGE_VERSION)
+pkglibdir	= $(libdir)/$(PKG_DIR)
+
+top_builddir	= @abs_top_builddir@
+
+INSTALL_OPTIONS	=
+INSTALL		= @INSTALL@ $(INSTALL_OPTIONS)
+INSTALL_DATA_DIR = @INSTALL_DATA_DIR@
+INSTALL_DATA	= @INSTALL_DATA@
+INSTALL_PROGRAM	= @INSTALL_PROGRAM@
+INSTALL_SCRIPT	= @INSTALL_SCRIPT@
+INSTALL_LIBRARY	= @INSTALL_LIBRARY@
+
+PACKAGE_NAME	= @PACKAGE_NAME@
+PACKAGE_VERSION	= @PACKAGE_VERSION@
+CC		= @CC@
+CCLD		= @CCLD@
+CFLAGS_DEFAULT	= @CFLAGS_DEFAULT@
+CFLAGS_WARNING	= @CFLAGS_WARNING@
+EXEEXT		= @EXEEXT@
+MAKE_LIB	= @MAKE_LIB@
+OBJEXT		= @OBJEXT@
+RANLIB		= @RANLIB@
+SHLIB_CFLAGS	= @SHLIB_CFLAGS@
+SHLIB_LD	= @SHLIB_LD@
+SHLIB_LD_LIBS	= @SHLIB_LD_LIBS@
+STLIB_LD	= @STLIB_LD@
+TCL_BIN_DIR	= @TCL_BIN_DIR@
+TCL_SRC_DIR	= @TCL_SRC_DIR@
+TK_BIN_DIR	= @TK_BIN_DIR@
+TK_SRC_DIR	= @TK_SRC_DIR@
+
+#========================================================================
+# Test environment.  The tests run in tclsh and load Tk as a package,
+# against the Tcl/Tk pair the extension was configured with.
+#========================================================================
+
+EXTRA_PATH	= $(top_builddir):$(TCL_BIN_DIR):$(TK_BIN_DIR)
+PKG_ENV		= @LD_LIBRARY_PATH_VAR@="$(EXTRA_PATH):$(@LD_LIBRARY_PATH_VAR@)" \
+		  PATH="$(EXTRA_PATH):$(PATH)"
+TCLSH_PROG	= @TCLSH_PROG@
+WISH_PROG	= @WISH_PROG@
+TCLSH		= $(PKG_ENV) $(TCLSH_PROG)
+WISH		= $(PKG_ENV) $(WISH_PROG)
+
+# Script that makes the freshly built package available without
+# installing it.
+LOAD_SCRIPT	= package ifneeded $(PACKAGE_NAME) $(PACKAGE_VERSION) \
+		  [list apply {{lib tcl} {package require Tk 9.0-; \
+		  load \$$lib Tkcapture; source -encoding utf-8 \$$tcl}} \
+		  [file normalize `@CYGPATH@ $(PKG_LIB_FILE)`] \
+		  [file normalize `@CYGPATH@ $(srcdir)/library/tkcapture.tcl`]]
+
+SHARED_BUILD	= @SHARED_BUILD@
+
+INCLUDES	= @PKG_INCLUDES@ @TCL_INCLUDES@ @TK_INCLUDES@ @TK_XINCLUDES@
+
+PKG_CFLAGS	= @PKG_CFLAGS@
+
+DEFS		= @DEFS@ $(PKG_CFLAGS)
+
+CONFIG_CLEAN_FILES = Makefile pkgIndex.tcl
+CLEANFILES	= @CLEANFILES@
+
+CPPFLAGS	= @CPPFLAGS@
+LIBS		= @PKG_LIBS@ @LIBS@
+AR		= @AR@
+CFLAGS		= @CFLAGS@
+LDFLAGS		= @LDFLAGS@
+LDFLAGS_DEFAULT	= @LDFLAGS_DEFAULT@
+COMPILE		= $(CC) $(DEFS) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) \
+		  $(AM_CFLAGS) $(CFLAGS)
+
+.SUFFIXES: .c .m .$(OBJEXT)
+
+#========================================================================
+# Targets
+#========================================================================
+
+all: binaries libraries doc
+
+binaries: $(BINARIES)
+
+libraries:
+
+doc:
+
+install: all install-binaries install-doc
+
+install-binaries: binaries install-lib-binaries
+
+install-doc: doc
+	@$(INSTALL_DATA_DIR) "$(DESTDIR)$(mandir)/mann"
+	@list='$(srcdir)/doc/*.n'; for i in $$list; do \
+	    if test -f $$i; then \
+		echo "Installing $$i"; \
+		$(INSTALL_DATA) $$i "$(DESTDIR)$(mandir)/mann"; \
+	    fi; \
+	done
+
+# Standard input is an empty pipe: Tk on macOS sends standard output and
+# error to /dev/null when standard input is /dev/null or closed (as
+# under CI or another program), which would hide the test results.
+test: binaries libraries
+	@: | $(TCLSH) `@CYGPATH@ $(srcdir)/tests/all.tcl` $(TESTFLAGS) \
+	    -load "$(LOAD_SCRIPT)"
+
+# Runs the tests under Xvfb once for each kind of visual that the pixel
+# conversion distinguishes. A colon in a screen specification stands
+# for a space.
+XVFB_SCREENS	= 1024x768x24 1024x768x30 1024x768x16 1024x768x15 \
+		  1024x768x8 1024x768x24:-cc:5 1024x768x8:-cc:0
+
+test-visuals: binaries libraries
+	@for screen in $(XVFB_SCREENS); do \
+	    screen=`echo $$screen | tr : ' '`; \
+	    echo "=== Xvfb -screen 0 $$screen"; \
+	    xvfb-run -a -s "-screen 0 $$screen" $(MAKE) -s test \
+		TESTFLAGS="$(TESTFLAGS)" || exit 1; \
+	done
+
+shell: binaries libraries
+	@$(WISH) $(SCRIPT)
+
+$(PKG_LIB_FILE): $(PKG_OBJECTS)
+	-rm -f $(PKG_LIB_FILE)
+	${MAKE_LIB}
+	$(RANLIB) $(PKG_LIB_FILE)
+
+VPATH = $(srcdir):$(srcdir)/generic:$(srcdir)/unix:$(srcdir)/win:$(srcdir)/macosx
+
+.c.@OBJEXT@:
+	$(COMPILE) -c `@CYGPATH@ $<` -o $@
+
+.m.@OBJEXT@:
+	$(COMPILE) -c `@CYGPATH@ $<` -o $@
+
+$(PKG_OBJECTS): $(srcdir)/generic/tkCapture.h
+
+clean:
+	-test -z "$(BINARIES)" || rm -f $(BINARIES)
+	-rm -f *.$(OBJEXT) core *.core
+	-test -z "$(CLEANFILES)" || rm -f $(CLEANFILES)
+
+distclean: clean
+	-rm -f $(CONFIG_CLEAN_FILES)
+	-rm -f config.cache config.log config.status
+
+install-lib-binaries: binaries
+	@$(INSTALL_DATA_DIR) "$(DESTDIR)$(pkglibdir)"
+	@list='$(lib_BINARIES)'; for p in $$list; do \
+	  if test -f $$p; then \
+	    echo " $(INSTALL_LIBRARY) $$p $(DESTDIR)$(pkglibdir)/$$p"; \
+	    $(INSTALL_LIBRARY) $$p "$(DESTDIR)$(pkglibdir)/$$p"; \
+	  fi; \
+	done
+	@list='$(PKG_TCL_SOURCES)'; for p in $$list; do \
+	  if test -f $(srcdir)/$$p; then \
+	    destp=`basename $$p`; \
+	    echo " Install $$destp $(DESTDIR)$(pkglibdir)/$$destp"; \
+	    $(INSTALL_DATA) $(srcdir)/$$p "$(DESTDIR)$(pkglibdir)/$$destp"; \
+	  fi; \
+	done
+	@echo " Install pkgIndex.tcl $(DESTDIR)$(pkglibdir)"; \
+	$(INSTALL_DATA) pkgIndex.tcl "$(DESTDIR)$(pkglibdir)"
+
+Makefile: $(srcdir)/Makefile.in  $(top_builddir)/config.status
+	cd $(top_builddir) \
+	  && CONFIG_FILES=$@ CONFIG_HEADERS= $(SHELL) ./config.status
+
+uninstall-binaries:
+	list='$(lib_BINARIES)'; for p in $$list; do \
+	  rm -f "$(DESTDIR)$(pkglibdir)/$$p"; \
+	done
+	list='$(PKG_TCL_SOURCES)'; for p in $$list; do \
+	  p=`basename $$p`; \
+	  rm -f "$(DESTDIR)$(pkglibdir)/$$p"; \
+	done
+	rm -f "$(DESTDIR)$(pkglibdir)/pkgIndex.tcl"
+
+#========================================================================
+# Source distribution: "make dist" writes $(DIST_ROOT)/$(PKG_DIR).tar.gz.
+# The license is distributed with the sources, as Tcl and Tk do; it is
+# not installed.
+#========================================================================
+
+DIST_ROOT	= /tmp/dist
+DIST_DIR	= $(DIST_ROOT)/$(PKG_DIR)
+DIST_INSTALL_DATA	= CPPROG='cp -p' $(INSTALL) -m 644
+DIST_INSTALL_SCRIPT	= CPPROG='cp -p' $(INSTALL) -m 755
+COMPRESS	= tar zcvf $(PKG_DIR).tar.gz $(PKG_DIR)
+
+dist-clean:
+	rm -rf $(DIST_DIR) $(DIST_ROOT)/$(PKG_DIR).tar.*
+
+dist: dist-clean
+	$(INSTALL_DATA_DIR) $(DIST_DIR)
+	$(DIST_INSTALL_DATA) $(srcdir)/Makefile.in $(srcdir)/aclocal.m4 \
+	    $(srcdir)/configure.ac $(srcdir)/pkgIndex.tcl.in \
+	    $(srcdir)/license.terms $(srcdir)/README.md $(DIST_DIR)/
+	$(DIST_INSTALL_SCRIPT) $(srcdir)/configure $(DIST_DIR)/
+	$(INSTALL_DATA_DIR) $(DIST_DIR)/tclconfig
+	$(DIST_INSTALL_DATA) $(srcdir)/tclconfig/README.txt \
+	    $(srcdir)/tclconfig/license.terms $(srcdir)/tclconfig/tcl.m4 \
+	    $(DIST_DIR)/tclconfig/
+	$(DIST_INSTALL_SCRIPT) $(srcdir)/tclconfig/install-sh \
+	    $(DIST_DIR)/tclconfig/
+	list='doc generic library macosx tests unix win'; \
+	for p in $$list; do \
+	    $(INSTALL_DATA_DIR) $(DIST_DIR)/$$p; \
+	    $(DIST_INSTALL_DATA) $(srcdir)/$$p/* $(DIST_DIR)/$$p/; \
+	done
+	(cd $(DIST_ROOT); $(COMPRESS);)
+
+uninstall-doc:
+	list='$(srcdir)/doc/*.n'; for i in $$list; do \
+	  rm -f "$(DESTDIR)$(mandir)/mann/`basename $$i`"; \
+	done
+
+.PHONY: all binaries clean distclean doc install libraries test shell
+.PHONY: test-visuals
+.PHONY: install-binaries install-doc install-lib-binaries uninstall-binaries
+.PHONY: uninstall-doc dist dist-clean
+
+# Tell versions [3.59,3.63) of GNU make to not export all variables.
+# Otherwise a system limit (for SysV at least) may be exceeded.
+.NOEXPORT:

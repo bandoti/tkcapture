@@ -1,0 +1,12 @@
+deps/
+build/
+autom4te.cache/
+configure~
+win/Release_*/
+win/Debug_*/
+win/nmakehlp.exe
+win/nmakehlp.obj
+win/nmakehlp.out
+win/versions.vc
+# Left by safe.test on Windows, which cannot delete a loaded library.
+tests/tkcapture-safe/

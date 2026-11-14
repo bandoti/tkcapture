@@ -1,0 +1,34 @@
+#------------------------------------------------------------- -*- makefile -*-
+#
+# Makefile for building the tkcapture extension with Visual C++ (nmake).
+#
+# Basic build, test and install:
+#   nmake /f makefile.vc INSTALLDIR=c:\path\to\tcl
+#   nmake /f makefile.vc INSTALLDIR=c:\path\to\tcl test
+#   nmake /f makefile.vc INSTALLDIR=c:\path\to\tcl install
+#
+# INSTALLDIR is the directory in which Tcl and Tk are installed. For
+# other build options (debug, static, ...) see the comments in rules.vc.
+#------------------------------------------------------------------------------
+
+PROJECT = tkcapture
+NEED_TK = 1
+PRJ_LIBS = dwmapi.lib
+
+!include "rules-ext.vc"
+
+PRJ_OBJS = \
+	$(TMP_DIR)\tkCapture.obj \
+	$(TMP_DIR)\tkCaptureWin.obj
+
+PRJ_HEADERS = $(GENERICDIR)\tkCapture.h
+
+PRJ_DEFINES = -D_CRT_SECURE_NO_DEPRECATE
+
+!include "$(_RULESDIR)\targets.vc"
+
+# The package index loads the DLL and sources library\tkcapture.tcl,
+# which the install and test targets copy next to it.
+pkgindex: default-pkgindex-tea
+
+install: default-install-docs-n

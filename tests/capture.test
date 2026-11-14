@@ -1,0 +1,1431 @@
+# capture.test --
+#
+#	Tests for tkcapture::capture and the ::tkcapture::_grab primitive.
+#
+# Copyright © 2026 Bandoti Ltd.
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+
+package require tcltest 2.5
+namespace import ::tcltest::*
+loadTestedCommands
+package require Tk
+package require tkcapture
+
+testConstraint x11 [expr {[tk windowingsystem] eq "x11"}]
+testConstraint aqua [expr {[tk windowingsystem] eq "aqua"}]
+testConstraint win32 [expr {[tk windowingsystem] eq "win32"}]
+# Verified on X11 and macOS, not yet run on Windows.
+testConstraint notWin32 [expr {[tk windowingsystem] ne "win32"}]
+testConstraint menubarInWindow [expr {[tk windowingsystem] ne "aqua"}]
+# Windows of the application stacked over an embedded toplevel are masked
+# on X11 and Windows, not on macOS (see PLATFORM NOTES in the manual page).
+# There, -constraints knownBug runs the tests to show the failure.
+testConstraint overlayMasked [expr {[tk windowingsystem] ne "aqua"
+	|| [testConstraint knownBug]}]
+# Windows and macOS deliver the window's own pixels even where another
+# window covers it; X11 does so only under a compositing manager.
+testConstraint occlusionProof [expr {[tk windowingsystem] ne "x11"}]
+# The X11 backend reads toplevels through the Composite extension if it
+# was built with it and a compositing manager runs. The probe reads a
+# covered window without the extension: it keeps its own pixels only
+# under a compositing manager.
+testConstraint xcomposite [expr {[::tkcapture::pkgconfig get xcomposite]
+	&& [apply {{} {
+    if {[tk windowingsystem] ne "x11"} {
+	return 0
+    }
+    foreach {w colour geometry} {
+	.probe #ff0000 40x40+60+60 .probeCover #0000ff 40x40+70+70
+    } {
+	toplevel $w -background $colour
+	wm overrideredirect $w 1
+	wm geometry $w $geometry
+    }
+    update
+    if {![winfo viewable .probeCover]} {
+	tkwait visibility .probeCover
+    }
+    raise .probeCover
+    update
+    set ::tkcapture::forceFallback 1
+    set composited [expr {![catch {tkcapture::capture .probe} img]
+	    && [$img get 30 30] eq {255 0 0}}]
+    unset ::tkcapture::forceFallback
+    catch {image delete $img}
+    destroy .probe .probeCover
+    return $composited
+}}]}]
+# Colours other than the primaries are only approximated on shallow or
+# colormapped visuals.
+testConstraint deepColor [expr {[winfo depth .] >= 15
+	&& [winfo visual .] in {truecolor directcolor}}]
+testConstraint trueColor24 [expr {[winfo depth .] >= 24}]
+# Iconifying needs a window manager.
+testConstraint canIconify [apply {{} {
+    toplevel .probe
+    update
+    wm iconify .probe
+    update
+    set iconic [expr {[wm state .probe] eq "iconic"}]
+    destroy .probe
+    return $iconic
+}}]
+
+wm geometry . +400+400
+
+# makeTop --
+#
+#	Creates the toplevel .t, 200x120 pixels, with a red frame .t.a on
+#	the left and a green frame .t.b on the right, each 100x120. .t.b
+#	holds a blue frame .t.b.c of 40x30 at (20, 10) with a white frame
+#	.t.b.c.d of 10x10 at (5, 5) in it. Returns when .t is displayed.
+
+proc makeTop {} {
+    destroy .t
+    toplevel .t
+    wm geometry .t 200x120+30+30
+    frame .t.a -background #ff0000 -width 100 -height 120
+    frame .t.b -background #00ff00 -width 100 -height 120
+    place .t.a -x 0 -y 0
+    place .t.b -x 100 -y 0
+    frame .t.b.c -background #0000ff -width 40 -height 30
+    place .t.b.c -x 20 -y 10
+    frame .t.b.c.d -background #ffffff -width 10 -height 10
+    place .t.b.c.d -x 5 -y 5
+    showTop .t
+}
+
+# showTop --
+#
+#	Waits until a toplevel is displayed and has its final size.
+
+proc showTop {top} {
+    raise $top
+    update
+    if {![winfo viewable $top]} {
+	tkwait visibility $top
+    }
+    update
+
+    # Some window managers map a window far off screen and move it to its
+    # place a moment later.
+    for {set i 0} {$i < 200 && ([winfo rootx $top] < -10000
+	    || [winfo rooty $top] < -10000)} {incr i} {
+	after 10
+	update
+    }
+}
+
+# errorInfo --
+#
+#	Runs a script that is expected to fail; returns the message and
+#	the error code.
+
+proc errorInfo {script} {
+    if {![catch {uplevel 1 $script} message options]} {
+	return [list "no error" $message]
+    }
+    return [list $message [dict get $options -errorcode]]
+}
+
+# near --
+#
+#	Tells whether the pixel (x, y) of an image is within 'tolerance' of
+#	the colour {r g b} in every channel.
+
+proc near {image x y rgb {tolerance 8}} {
+    foreach got [lrange [$image get $x $y] 0 2] want $rgb {
+	if {abs($got - $want) > $tolerance} {
+	    return 0
+	}
+    }
+    return 1
+}
+
+# samePixels --
+#
+#	Tells whether the image 'part' equals the rectangle of the image
+#	'full' whose upper left corner is (x, y).
+
+proc samePixels {full part x y} {
+    set w [image width $part]
+    set h [image height $part]
+    if {$x < 0 || $y < 0 || $x + $w > [image width $full]
+	    || $y + $h > [image height $full]} {
+	return 0
+    }
+    expr {[$full data -from $x $y [expr {$x + $w}] [expr {$y + $h}]]
+	    eq [$part data]}
+}
+
+#
+# Grey visuals cannot display the colours that the tests below rely on;
+# check black, white and the geometry there, and stop.
+#
+
+if {[winfo visual .] in {staticgray grayscale}} {
+    test capture-0.1 {capture on a grey visual} -setup {
+	toplevel .t -background #ffffff
+	wm geometry .t 100x60+30+30
+	frame .t.f -background #000000 -width 20 -height 10
+	place .t.f -x 30 -y 20
+	showTop .t
+    } -body {
+	set img [tkcapture::capture .t]
+	list [image width $img] [image height $img] [$img get 0 0] \
+	    [$img get 29 19] [$img get 30 20] [$img get 49 29] \
+	    [$img get 50 30] [$img get 40 25 -withalpha]
+    } -cleanup {
+	image delete $img
+	destroy .t
+    } -result {100 60 {255 255 255} {255 255 255} {0 0 0} {0 0 0} {255 255 255} {0 0 0 255}}
+    cleanupTests
+    return
+}
+
+#
+# Argument errors.
+#
+
+makeTop
+
+test capture-1.1 {wrong number of arguments} -body {
+    errorInfo {tkcapture::capture}
+} -match glob -result {{wrong # args: should be "tkcapture::capture window ?arg ...?"} {TCL WRONGARGS}}
+
+test capture-1.2 {bad window} -body {
+    errorInfo {tkcapture::capture .nope}
+} -result {{bad window path name ".nope"} {TK LOOKUP WINDOW .nope}}
+
+test capture-1.3 {the window is checked before the options} -body {
+    errorInfo {tkcapture::capture .nope -bogus 1}
+} -result {{bad window path name ".nope"} {TK LOOKUP WINDOW .nope}}
+
+test capture-1.4 {bad option} -body {
+    errorInfo {tkcapture::capture .t -bogus 1}
+} -result {{bad option "-bogus": must be -photo, -region, -scale, -update, -menubar, or -nocomplain} {TCL LOOKUP INDEX option -bogus}}
+
+test capture-1.5 {missing option value} -body {
+    errorInfo {tkcapture::capture .t -update 0 -photo}
+} -result {{value for "-photo" missing} {TK VALUE_MISSING}}
+
+test capture-1.6 {bad -scale} -body {
+    errorInfo {tkcapture::capture .t -scale huge}
+} -result {{bad scale "huge": must be logical or device} {TCL LOOKUP INDEX scale huge}}
+
+test capture-1.7 {bad -update} -body {
+    errorInfo {tkcapture::capture .t -update maybe}
+} -result {{expected boolean value but got "maybe"} {TCL VALUE NUMBER}}
+
+test capture-1.8 {bad -menubar} -body {
+    errorInfo {tkcapture::capture .t -menubar 2x}
+} -result {{expected boolean value but got "2x"} {TCL VALUE NUMBER}}
+
+test capture-1.8.1 {bad -nocomplain} -body {
+    errorInfo {tkcapture::capture .t -nocomplain perhaps}
+} -result {{expected boolean value but got "perhaps"} {TCL VALUE NUMBER}}
+
+test capture-1.9 {-region with three values} -body {
+    errorInfo {tkcapture::capture .t -region {0 0 10}}
+} -result {{bad region "0 0 10": must be a list of four integers x1 y1 x2 y2} {TK CAPTURE REGION}}
+
+test capture-1.10 {-region with a non-integer} -body {
+    errorInfo {tkcapture::capture .t -region {0 0 10 1.5}}
+} -result {{bad region "0 0 10 1.5": must be a list of four integers x1 y1 x2 y2} {TK CAPTURE REGION}}
+
+set unbalanced "\{"
+test capture-1.11 {-region that is not a list} -body {
+    lindex [errorInfo {tkcapture::capture .t -region $unbalanced}] 1
+} -result {TK CAPTURE REGION}
+
+test capture-1.12 {-photo names no image} -body {
+    errorInfo {tkcapture::capture .t -photo nosuchimage}
+} -result {{image "nosuchimage" does not exist or is not a photo image} {TK LOOKUP PHOTO nosuchimage}}
+
+test capture-1.13 {-photo names an image of another type} -setup {
+    image create bitmap bm
+} -body {
+    errorInfo {tkcapture::capture .t -photo bm}
+} -cleanup {
+    image delete bm
+} -result {{image "bm" does not exist or is not a photo image} {TK LOOKUP PHOTO bm}}
+
+test capture-1.14 {empty region: zero width} -body {
+    errorInfo {tkcapture::capture .t -region {5 5 5 10}}
+} -result {{capture region is empty} {TK CAPTURE EMPTY_REGION}}
+
+test capture-1.15 {empty region: corners swapped} -body {
+    errorInfo {tkcapture::capture .t -region {50 50 10 10}}
+} -result {{capture region is empty} {TK CAPTURE EMPTY_REGION}}
+
+test capture-1.16 {empty region: outside the toplevel} -body {
+    errorInfo {tkcapture::capture .t.a -region {-50 0 -10 10}}
+} -result {{capture region is empty} {TK CAPTURE EMPTY_REGION}}
+
+test capture-1.17 {empty region: extreme coordinates do not overflow} -body {
+    list [errorInfo {tkcapture::capture .t.b \
+		-region {2147483000 0 2147483647 10}}] \
+	[errorInfo {tkcapture::capture .t.b \
+		-region {-2147483648 -2147483648 -2147483000 10}}]
+} -result {{{capture region is empty} {TK CAPTURE EMPTY_REGION}} {{capture region is empty} {TK CAPTURE EMPTY_REGION}}}
+
+test capture-1.18 {-menubar needs a toplevel} -body {
+    errorInfo {tkcapture::capture .t.a -menubar 1}
+} -result {{can't capture the menubar: ".t.a" is not a toplevel} {TK CAPTURE MENUBAR}}
+
+test capture-1.19 {options can be abbreviated} -body {
+    set img [tkcapture::capture .t -reg {0 0 10 10} -sc logical -up 1]
+    list [image width $img] [image height $img]
+} -cleanup {
+    image delete $img
+} -result {10 10}
+
+test capture-1.20 {a later option overrides an earlier one} -body {
+    set img [tkcapture::capture .t -region {0 0 10 10} -region {0 0 20 5}]
+    list [image width $img] [image height $img]
+} -cleanup {
+    image delete $img
+} -result {20 5}
+
+test capture-1.21 {_grab: wrong number of arguments} -body {
+    errorInfo {tkcapture::_grab .t}
+} -result {{wrong # args: should be "tkcapture::_grab window photo region scale menubar nocomplain"} {TCL WRONGARGS}}
+
+test capture-1.22 {_grab: argument validation} -setup {
+    image create photo p
+} -body {
+    list [errorInfo {tkcapture::_grab .nope p {} logical 0 0}] \
+	[errorInfo {tkcapture::_grab .t p {} tiny 0 0}] \
+	[errorInfo {tkcapture::_grab .t p {} logical perhaps 0}] \
+	[errorInfo {tkcapture::_grab .t p {} logical 0 perhaps}]
+} -cleanup {
+    image delete p
+} -result {{{bad window path name ".nope"} {TK LOOKUP WINDOW .nope}} {{bad scale "tiny": must be logical or device} {TCL LOOKUP INDEX scale tiny}} {{expected boolean value but got "perhaps"} {TCL VALUE NUMBER}} {{expected boolean value but got "perhaps"} {TCL VALUE NUMBER}}}
+
+test capture-1.23 {_expose: arguments} -body {
+    # The first call may deliver events left by earlier captures.
+    tkcapture::_expose .t
+    list [errorInfo {tkcapture::_expose}] \
+	[errorInfo {tkcapture::_expose .nope}] [tkcapture::_expose .t]
+} -result {{{wrong # args: should be "tkcapture::_expose window"} {TCL WRONGARGS}} {{bad window path name ".nope"} {TK LOOKUP WINDOW .nope}} 0}
+
+#
+# Windows that are not displayed.
+#
+
+test capture-2.1 {withdrawn toplevel} -setup {
+    toplevel .w
+    wm withdraw .w
+    update
+} -body {
+    errorInfo {tkcapture::capture .w}
+} -cleanup {
+    destroy .w
+} -result {{window ".w" is not viewable} {TK CAPTURE UNMAPPED}}
+
+test capture-2.2 {unmanaged child} -setup {
+    frame .t.hidden -width 10 -height 10
+} -body {
+    errorInfo {tkcapture::capture .t.hidden}
+} -cleanup {
+    destroy .t.hidden
+} -result {{window ".t.hidden" is not viewable} {TK CAPTURE UNMAPPED}}
+
+test capture-2.3 {mapped child of an unmapped parent} -setup {
+    frame .t.hidden -width 20 -height 20
+    frame .t.hidden.in -width 10 -height 10
+    place .t.hidden -x 0 -y 0
+    place .t.hidden.in -x 0 -y 0
+    update
+    place forget .t.hidden
+    update
+} -body {
+    errorInfo {tkcapture::capture .t.hidden.in}
+} -cleanup {
+    destroy .t.hidden
+} -result {{window ".t.hidden.in" is not viewable} {TK CAPTURE UNMAPPED}}
+
+test capture-2.4 {iconified toplevel} -constraints canIconify -setup {
+    toplevel .w
+    showTop .w
+    wm iconify .w
+    update
+} -body {
+    errorInfo {tkcapture::capture .w}
+} -cleanup {
+    destroy .w
+} -result {{window ".w" is iconified} {TK CAPTURE ICONIFIED}}
+
+test capture-2.5 {toplevel that was never mapped} -setup {
+    toplevel .w
+    wm withdraw .w
+} -body {
+    errorInfo {tkcapture::capture .w -update 0}
+} -cleanup {
+    destroy .w
+} -result {{window ".w" is not viewable} {TK CAPTURE UNMAPPED}}
+
+test capture-2.6 {a failed capture leaves no image behind} -body {
+    set before [lsort [image names]]
+    catch {tkcapture::capture .t -region {5 5 5 5}}
+    catch {tkcapture::capture .t.a -menubar 1}
+    expr {[lsort [image names]] eq $before}
+} -result 1
+
+test capture-2.7 {a failed capture leaves the -photo image alone} -setup {
+    image create photo p -width 7 -height 5
+    p put #123456 -to 0 0 7 5
+} -body {
+    catch {tkcapture::capture .t -photo p -region {5 5 5 5}}
+    list [image width p] [image height p] [p get 3 3] \
+	[dict exists [p cget -metadata] capture]
+} -cleanup {
+    image delete p
+} -result {7 5 {18 52 86} 0}
+
+test capture-2.8 {window destroyed by an idle callback} -setup {
+    frame .t.gone -width 10 -height 10
+    place .t.gone -x 0 -y 0
+    update
+} -body {
+    after idle {destroy .t.gone}
+    errorInfo {tkcapture::capture .t.gone}
+} -result {{bad window path name ".t.gone"} {TK LOOKUP WINDOW .t.gone}}
+
+#
+# Size, colours and coordinates.
+#
+
+makeTop
+
+test capture-3.1 {size of a toplevel capture} -body {
+    set img [tkcapture::capture .t]
+    list [image width $img] [image height $img] \
+	[expr {[image width $img] == [winfo width .t]}] \
+	[expr {[image height $img] == [winfo height .t]}]
+} -cleanup {
+    image delete $img
+} -result {200 120 1 1}
+
+test capture-3.2 {size of a widget capture} -body {
+    set img [tkcapture::capture .t.b.c]
+    list [image width $img] [image height $img]
+} -cleanup {
+    image delete $img
+} -result {40 30}
+
+test capture-3.3 {known colours: channel order} -body {
+    set img [tkcapture::capture .t]
+    list [$img get 0 0] [$img get 99 119] [$img get 100 0] \
+	[$img get 199 119] [$img get 120 10] [$img get 159 39] \
+	[$img get 125 15] [$img get 134 24] [$img get 135 25]
+} -cleanup {
+    image delete $img
+} -result {{255 0 0} {255 0 0} {0 255 0} {0 255 0} {0 0 255} {0 0 255} {255 255 255} {255 255 255} {0 0 255}}
+
+test capture-3.4 {captured pixels are opaque} -body {
+    set img [tkcapture::capture .t]
+    list [$img get 0 0 -withalpha] [$img transparency get 150 60] \
+	[$img transparency get 199 119] \
+	[dict get [$img cget -metadata] capture complete]
+} -cleanup {
+    image delete $img
+} -result {{255 0 0 255} 0 0 1}
+
+test capture-3.5 {intermediate colours are scaled by channel width} -constraints {
+    deepColor
+} -setup {
+    frame .t.mid -background #336699 -width 20 -height 20
+    place .t.mid -x 0 -y 0
+    frame .t.grey -background #808080 -width 20 -height 20
+    place .t.grey -x 20 -y 0
+} -body {
+    set img [tkcapture::capture .t]
+    list [near $img 10 10 {51 102 153}] [near $img 30 10 {128 128 128}]
+} -cleanup {
+    image delete $img
+    destroy .t.mid .t.grey
+} -result {1 1}
+
+test capture-3.6 {intermediate colours are exact on a 24-bit visual} -constraints {
+    trueColor24
+} -setup {
+    frame .t.mid -background #336699 -width 20 -height 20
+    place .t.mid -x 0 -y 0
+} -body {
+    set img [tkcapture::capture .t.mid]
+    $img get 10 10
+} -cleanup {
+    image delete $img
+    destroy .t.mid
+} -result {51 102 153}
+
+test capture-3.7 {crop consistency: widget against toplevel} -body {
+    set full [tkcapture::capture .t]
+    set result {}
+    foreach {w x y} {.t.a 0 0 .t.b 100 0 .t.b.c 120 10 .t.b.c.d 125 15} {
+	set part [tkcapture::capture $w]
+	lappend result [samePixels $full $part $x $y]
+	image delete $part
+    }
+    set result
+} -cleanup {
+    image delete $full
+} -result {1 1 1 1}
+
+test capture-3.8 {crop consistency: nested widget with borders} -setup {
+    frame .t.f -borderwidth 7 -relief ridge -padx 3 -pady 5 \
+	-background #ffff00
+    frame .t.f.in -borderwidth 2 -relief solid -background #ff00ff \
+	-width 30 -height 20
+    pack .t.f.in
+    place .t.f -x 13 -y 17
+    update
+} -body {
+    set full [tkcapture::capture .t]
+    set part [tkcapture::capture .t.f.in]
+    list [samePixels $full $part [expr {13 + 7 + 3}] [expr {17 + 7 + 5}]] \
+	[$part get 15 10] [image width $part] [image height $part]
+} -cleanup {
+    image delete $full $part
+    destroy .t.f
+} -result {1 {255 0 255} 30 20}
+
+test capture-3.9 {region inside the window} -body {
+    set img [tkcapture::capture .t -region {90 5 110 15}]
+    list [image width $img] [image height $img] [$img get 9 0] \
+	[$img get 10 0]
+} -cleanup {
+    image delete $img
+} -result {20 10 {255 0 0} {0 255 0}}
+
+test capture-3.10 {region with a margin around a widget} -body {
+    set img [tkcapture::capture .t.b.c -region {-5 -5 45 35}]
+    list [image width $img] [image height $img] [$img get 0 0] \
+	[$img get 4 4] [$img get 5 5] [$img get 44 34] [$img get 45 35] \
+	[$img get 49 39] [dict get [$img cget -metadata] capture x] \
+	[dict get [$img cget -metadata] capture y]
+} -cleanup {
+    image delete $img
+} -result {50 40 {0 255 0} {0 255 0} {0 0 255} {0 0 255} {0 255 0} {0 255 0} -5 -5}
+
+test capture-3.11 {region clipped at the toplevel edge} -body {
+    set img [tkcapture::capture .t.a -region {-5 -5 30 20}]
+    set md [dict get [$img cget -metadata] capture]
+    list [image width $img] [image height $img] [dict get $md x] \
+	[dict get $md y] [dict get $md width] [dict get $md height]
+} -cleanup {
+    image delete $img
+} -result {30 20 0 0 30 20}
+
+test capture-3.12 {region clipped at the far toplevel edge} -body {
+    set img [tkcapture::capture .t.b.c -region {30 20 1000 1000}]
+    set md [dict get [$img cget -metadata] capture]
+    list [image width $img] [image height $img] [dict get $md x] \
+	[dict get $md y] [$img get 0 0] [$img get 10 10]
+} -cleanup {
+    image delete $img
+} -result {50 90 30 20 {0 0 255} {0 255 0}}
+
+test capture-3.13 {region reaching into a sibling} -body {
+    set img [tkcapture::capture .t.b -region {-10 0 10 10}]
+    list [$img get 9 5] [$img get 10 5]
+} -cleanup {
+    image delete $img
+} -result {{255 0 0} {0 255 0}}
+
+test capture-3.14 {-scale device} -body {
+    set img [tkcapture::capture .t.b.c -scale device]
+    set scale [dict get [$img cget -metadata] capture scale]
+    list [expr {[image width $img] == round(40 * $scale)}] \
+	[expr {[image height $img] == round(30 * $scale)}] \
+	[expr {$scale >= 1.0}] [$img get 0 0]
+} -cleanup {
+    image delete $img
+} -result {1 1 1 {0 0 255}}
+
+test capture-3.15 {-scale logical has scale 1.0} -body {
+    set img [tkcapture::capture .t.b.c -scale logical]
+    dict get [$img cget -metadata] capture scale
+} -cleanup {
+    image delete $img
+} -result 1.0
+
+#
+# Content that is not drawn by the captured window itself.
+#
+
+test capture-4.1 {canvas window item} -setup {
+    toplevel .e
+    wm geometry .e 160x120+40+40
+    canvas .e.c -background #ffffff -highlightthickness 0 -borderwidth 0
+    pack .e.c -fill both -expand 1
+    frame .e.c.f -background #ff0000 -width 30 -height 20
+    .e.c create window 50 40 -window .e.c.f -anchor nw
+    .e.c create rectangle 100 80 119 99 -fill #0000ff -outline #0000ff
+    showTop .e
+} -body {
+    set full [tkcapture::capture .e]
+    set part [tkcapture::capture .e.c.f]
+    list [$full get 10 10] [$full get 60 50] [$full get 110 90] \
+	[samePixels $full $part 50 40]
+} -cleanup {
+    image delete $full $part
+    destroy .e
+} -result {{255 255 255} {255 0 0} {0 0 255} 1}
+
+test capture-4.2 {notebook page} -setup {
+    toplevel .e
+    wm geometry .e 200x150+40+40
+    ttk::notebook .e.nb
+    frame .e.nb.one -background #ff0000
+    frame .e.nb.two -background #0000ff
+    .e.nb add .e.nb.one -text One
+    .e.nb add .e.nb.two -text Two
+    pack .e.nb -fill both -expand 1
+    showTop .e
+} -body {
+    set result {}
+    foreach page {.e.nb.one .e.nb.two} colour {{255 0 0} {0 0 255}} {
+	.e.nb select $page
+	set full [tkcapture::capture .e]
+	set part [tkcapture::capture $page]
+	set x [expr {[winfo rootx $page] - [winfo rootx .e]}]
+	set y [expr {[winfo rooty $page] - [winfo rooty .e]}]
+	lappend result [expr {[$part get 5 5] eq $colour}] \
+	    [samePixels $full $part $x $y]
+	image delete $full $part
+    }
+    lappend result [lindex [errorInfo {tkcapture::capture .e.nb.one}] 1]
+} -cleanup {
+    destroy .e
+} -result {1 1 1 1 {TK CAPTURE UNMAPPED}}
+
+test capture-4.3 {panedwindow panes} -setup {
+    toplevel .e
+    wm geometry .e 200x100+40+40
+    panedwindow .e.pw -orient horizontal -sashwidth 4 -borderwidth 0
+    frame .e.pw.l -background #ff0000 -width 80 -height 100
+    frame .e.pw.r -background #0000ff -width 80 -height 100
+    .e.pw add .e.pw.l .e.pw.r
+    pack .e.pw -fill both -expand 1
+    showTop .e
+} -body {
+    set full [tkcapture::capture .e]
+    set part [tkcapture::capture .e.pw.r]
+    set x [expr {[winfo rootx .e.pw.r] - [winfo rootx .e]}]
+    list [$full get 10 50] [$full get 190 50] [$part get 5 5] \
+	[samePixels $full $part $x 0]
+} -cleanup {
+    image delete $full $part
+    destroy .e
+} -result {{255 0 0} {0 0 255} {0 0 255} 1}
+
+test capture-4.4 {overlay placed over a widget} -setup {
+    toplevel .e
+    wm geometry .e 120x80+40+40
+    label .e.l -background #00ff00 -text "" -borderwidth 0 \
+	-highlightthickness 0
+    place .e.l -x 10 -y 10 -width 100 -height 40
+    frame .e.over -background #ff0000
+    place .e.over -x 60 -y 0 -width 60 -height 80
+    raise .e.over
+    showTop .e
+} -body {
+    set img [tkcapture::capture .e.l]
+    list [image width $img] [$img get 10 20] [$img get 49 20] \
+	[$img get 50 20] [$img get 99 20]
+} -cleanup {
+    image delete $img
+    destroy .e
+} -result {100 {0 255 0} {0 255 0} {255 0 0} {255 0 0}}
+
+test capture-4.5 {text and widgets are captured as displayed} -setup {
+    toplevel .e
+    wm geometry .e +40+40
+    button .e.b -text "Capture me" -foreground #000000 \
+	-background #ffffff -activebackground #ffffff
+    pack .e.b -padx 10 -pady 10
+    showTop .e
+} -body {
+    # The label must leave pixels that differ from the white background
+    # in the image. (Their colour is not checked: Tk draws text in wrong
+    # colours on DirectColor visuals.)
+    set img [tkcapture::capture .e.b]
+    set text 0
+    set background 0
+    set y [expr {[image height $img] / 2}]
+    for {set x 0} {$x < [image width $img]} {incr x} {
+	if {[$img get $x $y] eq {255 255 255}} {
+	    incr background
+	} else {
+	    incr text
+	}
+    }
+    expr {$text > 0 && $background > 0}
+} -cleanup {
+    image delete $img
+    destroy .e
+} -result 1
+
+test capture-4.6 {embedded toplevel} -constraints notWin32 -setup {
+    toplevel .e
+    wm geometry .e 160x120+40+40
+    .e configure -background #ffffff
+    frame .e.box -container 1
+    place .e.box -x 30 -y 20 -width 80 -height 60
+    showTop .e
+    toplevel .emb -use [winfo id .e.box] -background #ff0000
+    frame .emb.f -background #0000ff -width 20 -height 20
+    place .emb.f -x 10 -y 10
+    update
+    showTop .emb
+} -body {
+    set outer [tkcapture::capture .e]
+    set inner [tkcapture::capture .emb]
+    set leaf [tkcapture::capture .emb.f]
+    list [$outer get 5 5] [$outer get 35 25] [$outer get 45 35] \
+	[image width $inner] [image height $inner] \
+	[samePixels $outer $inner 30 20] [samePixels $inner $leaf 10 10]
+} -cleanup {
+    image delete $outer $inner $leaf
+    destroy .emb .e
+} -result {{255 255 255} {255 0 0} {0 0 255} 80 60 1 1}
+
+#
+# The target photo.
+#
+
+makeTop
+
+test capture-5.1 {a new photo is created for each capture} -body {
+    set a [tkcapture::capture .t.a]
+    set b [tkcapture::capture .t.a]
+    list [expr {$a ne $b}] [image type $a] [image type $b] \
+	[expr {$a in [image names]}]
+} -cleanup {
+    image delete $a $b
+} -result {1 photo photo 1}
+
+test capture-5.2 {-photo returns the given name} -setup {
+    image create photo snap
+} -body {
+    set before [llength [image names]]
+    list [tkcapture::capture .t -photo snap] \
+	[expr {[llength [image names]] == $before}] [image width snap] \
+	[image height snap]
+} -cleanup {
+    image delete snap
+} -result {snap 1 200 120}
+
+test capture-5.3 {reusing a larger photo shrinks it} -setup {
+    image create photo snap
+} -body {
+    tkcapture::capture .t -photo snap
+    set big [list [image width snap] [image height snap]]
+    tkcapture::capture .t.b.c.d -photo snap
+    list $big [image width snap] [image height snap] [snap cget -width] \
+	[snap cget -height] [snap get 0 0] [snap get 9 9]
+} -cleanup {
+    image delete snap
+} -result {{200 120} 10 10 0 0 {255 255 255} {255 255 255}}
+
+test capture-5.4 {reusing a smaller photo grows it} -setup {
+    image create photo snap
+} -body {
+    tkcapture::capture .t.b.c.d -photo snap
+    tkcapture::capture .t -photo snap
+    list [image width snap] [image height snap] [snap get 199 119]
+} -cleanup {
+    image delete snap
+} -result {200 120 {0 255 0}}
+
+test capture-5.5 {a photo with a declared size is resized} -setup {
+    image create photo snap -width 300 -height 300
+    snap put #000000 -to 0 0 300 300
+} -body {
+    tkcapture::capture .t.b.c -photo snap
+    list [image width snap] [image height snap] [snap cget -width] \
+	[snap cget -height]
+} -cleanup {
+    image delete snap
+} -result {40 30 0 0}
+
+test capture-5.6 {previous contents are replaced, not composited} -setup {
+    image create photo snap
+    snap put #000000 -to 0 0 40 30
+    snap transparency set 0 0 1
+} -body {
+    tkcapture::capture .t.b.c -photo snap
+    list [snap get 0 0] [snap transparency get 0 0]
+} -cleanup {
+    image delete snap
+} -result {{0 0 255} 0}
+
+test capture-5.7 {a displayed photo is refreshed} -setup {
+    image create photo snap
+    label .t.show -image snap -borderwidth 0
+    place .t.show -x 0 -y 0
+    update
+} -body {
+    tkcapture::capture .t.b.c -photo snap
+    update
+    list [winfo reqwidth .t.show] [winfo reqheight .t.show]
+} -cleanup {
+    destroy .t.show
+    image delete snap
+} -result {40 30}
+
+#
+# Metadata.
+#
+
+test capture-6.1 {keys of the capture metadata} -body {
+    set img [tkcapture::capture .t.b.c]
+    set md [$img cget -metadata]
+    list [lsort [dict keys $md]] [lsort [dict keys [dict get $md capture]]]
+} -cleanup {
+    image delete $img
+} -result {{DPI capture} {complete height rootx rooty scale time toplevel width window windowingsystem x y}}
+
+test capture-6.2 {metadata values} -body {
+    set before [clock milliseconds]
+    set img [tkcapture::capture .t.b.c -region {-5 -6 20 10}]
+    set md [dict get [$img cget -metadata] capture]
+    dict with md {}
+    list $window $toplevel $x $y $width $height \
+	[expr {$rootx == [winfo rootx .t.b.c] - 5}] \
+	[expr {$rooty == [winfo rooty .t.b.c] - 6}] \
+	[expr {$windowingsystem eq [tk windowingsystem]}] \
+	[expr {$time >= $before && $time <= [clock milliseconds]}]
+} -cleanup {
+    image delete $img
+} -result {.t.b.c .t -5 -6 25 16 1 1 1 1}
+
+test capture-6.3 {DPI follows tk scaling and the image scale} -body {
+    set img [tkcapture::capture .t]
+    set md [$img cget -metadata]
+    expr {abs([dict get $md DPI] - 72.0 * [tk scaling]
+	    * [dict get $md capture scale]) < 1e-6}
+} -cleanup {
+    image delete $img
+} -result 1
+
+test capture-6.4 {other metadata keys are preserved} -setup {
+    image create photo snap -metadata {Comment hello capture stale}
+} -body {
+    tkcapture::capture .t.a -photo snap
+    set md [snap cget -metadata]
+    list [dict get $md Comment] [dict get $md capture window]
+} -cleanup {
+    image delete snap
+} -result {hello .t.a}
+
+test capture-6.5 {image coordinates map back to widgets} -body {
+    set img [tkcapture::capture .t.b -region {10 0 80 60}]
+    set md [dict get [$img cget -metadata] capture]
+    # Image pixel (15, 12) is inside the blue frame .t.b.c.
+    set sx [expr {[dict get $md rootx] + 15}]
+    set sy [expr {[dict get $md rooty] + 12}]
+    list [$img get 15 12] [winfo containing $sx $sy]
+} -cleanup {
+    image delete $img
+} -result {{0 0 255} .t.b.c}
+
+#
+# Freshness and the event loop.
+#
+
+test capture-7.1 {pending redraws are flushed by default} -setup {
+    label .t.l -background #ff0000 -text "" -borderwidth 0 \
+	-highlightthickness 0
+    place .t.l -x 0 -y 0 -width 30 -height 30
+    update
+} -body {
+    .t.l configure -background #0000ff
+    set img [tkcapture::capture .t.l]
+    $img get 15 15
+} -cleanup {
+    image delete $img
+    destroy .t.l
+} -result {0 0 255}
+
+test capture-7.2 {pending geometry changes are flushed by default} -setup {
+    frame .t.new -background #0000ff -width 30 -height 30
+} -body {
+    place .t.new -x 0 -y 0
+    set img [tkcapture::capture .t.new]
+    list [image width $img] [$img get 15 15]
+} -cleanup {
+    image delete $img
+    destroy .t.new
+} -result {30 {0 0 255}}
+
+test capture-7.3 {-update 0 does not run idle callbacks} -body {
+    set ::ran 0
+    after idle {set ::ran 1}
+    set img [tkcapture::capture .t -update 0]
+    set result $::ran
+    update idletasks
+    lappend result $::ran
+} -cleanup {
+    image delete $img
+} -result {0 1}
+
+test capture-7.4 {-update 1 runs idle callbacks only} -body {
+    set ::idle 0
+    set ::timer 0
+    after idle {set ::idle 1}
+    set id [after 0 {set ::timer 1}]
+    set img [tkcapture::capture .t -update 1]
+    list $::idle $::timer
+} -cleanup {
+    after cancel $id
+    image delete $img
+} -result {1 0}
+
+test capture-7.5 {a toplevel is captured as soon as it is displayed} -body {
+    # On Windows the first capture of a new window used to come back
+    # black about one time in four, before the desktop window manager
+    # had composed it.
+    set result {}
+    for {set i 0} {$i < 10} {incr i} {
+	toplevel .e -background #00ff00
+	wm geometry .e 120x80+40+40
+	showTop .e
+	set img [tkcapture::capture .e]
+	lappend result [$img get 60 40]
+	image delete $img
+	destroy .e
+    }
+    lsort -unique $result
+} -cleanup {
+    destroy .e
+} -result {{0 255 0}}
+
+#
+# The menubar.
+#
+
+test capture-8.1 {-menubar on a toplevel without a menu} -body {
+    set img [tkcapture::capture .t -menubar 1]
+    list [image width $img] [image height $img] \
+	[dict get [$img cget -metadata] capture y]
+} -cleanup {
+    image delete $img
+} -result {200 120 0}
+
+test capture-8.2 {-menubar extends the capture upwards} -constraints {
+    menubarInWindow
+} -setup {
+    toplevel .e
+    wm geometry .e 200x100+40+40
+    frame .e.f -background #ff0000
+    pack .e.f -fill both -expand 1
+    menu .e.m
+    .e.m add cascade -label File
+    .e configure -menu .e.m
+    showTop .e
+} -body {
+    set plain [tkcapture::capture .e]
+    set img [tkcapture::capture .e -menubar 1]
+    set md [dict get [$img cget -metadata] capture]
+    set mh [expr {-[dict get $md y]}]
+    list [image height $plain] [expr {$mh > 0}] \
+	[expr {[image height $img] == 100 + $mh}] [image width $img] \
+	[expr {[dict get $md rooty] == [winfo rooty .e] - $mh}] \
+	[expr {[$img get 100 [expr {$mh - 1}]] ne {255 0 0}}] \
+	[$img get 100 $mh] [samePixels $img $plain 0 $mh]
+} -cleanup {
+    image delete $plain $img
+    destroy .e
+} -result {100 1 1 200 1 1 {255 0 0} 1}
+
+test capture-8.3 {-menubar with an explicit region} -constraints {
+    menubarInWindow
+} -setup {
+    toplevel .e
+    wm geometry .e 200x100+40+40
+    frame .e.f -background #ff0000
+    pack .e.f -fill both -expand 1
+    menu .e.m
+    .e.m add cascade -label File
+    .e configure -menu .e.m
+    showTop .e
+} -body {
+    set all [tkcapture::capture .e -menubar 1]
+    set mh [expr {-[dict get [$all cget -metadata] capture y]}]
+    # Negative y reaches into the menubar only with -menubar 1.
+    set img [tkcapture::capture .e -menubar 1 -region {0 -1000 50 10}]
+    set clipped [tkcapture::capture .e -region {0 -1000 50 10}]
+    list [expr {[image height $img] == $mh + 10}] [image width $img] \
+	[samePixels $all $img 0 0] [image height $clipped] \
+	[dict get [$clipped cget -metadata] capture y]
+} -cleanup {
+    image delete $all $img $clipped
+    destroy .e
+} -result {1 50 1 10 0}
+
+#
+# Windows that are partly off screen.
+#
+
+test capture-9.1 {off-screen pixels are transparent} -constraints x11 -setup {
+    # The window itself, not the compositing manager's buffer.
+    set ::tkcapture::forceFallback 1
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+-40+50
+    showTop .e
+} -body {
+    set img [tkcapture::capture .e]
+    set off [expr {-[winfo rootx .e]}]
+    list $off [image width $img] [image height $img] \
+	[$img get 0 30 -withalpha] [$img transparency get 39 30] \
+	[$img get 40 30 -withalpha] [$img get 99 59 -withalpha] \
+	[dict get [$img cget -metadata] capture complete]
+} -cleanup {
+    unset ::tkcapture::forceFallback
+    image delete $img
+    destroy .e
+} -result {40 100 60 {0 0 0 0} 1 {255 0 0 255} {255 0 0 255} 0}
+
+test capture-9.2 {a region that is entirely off screen is an error} -constraints {
+    x11
+} -setup {
+    # The window itself, not the compositing manager's buffer.
+    set ::tkcapture::forceFallback 1
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+-40+50
+    showTop .e
+    image create photo snap -width 7 -height 5
+    snap put #123456 -to 0 0 7 5
+} -body {
+    set before [lsort [image names]]
+    list [errorInfo {tkcapture::capture .e -region {0 0 30 20}}] \
+	[errorInfo {tkcapture::capture .e -region {0 0 30 20} -nocomplain 0}] \
+	[errorInfo {tkcapture::capture .e -region {0 0 30 20} -photo snap}] \
+	[expr {[lsort [image names]] eq $before}] [image width snap] \
+	[snap get 3 3]
+} -cleanup {
+    unset ::tkcapture::forceFallback
+    image delete snap
+    destroy .e
+} -result {{{no pixels of window ".e" could be read: the region is off screen or covered} {TK CAPTURE OFFSCREEN}} {{no pixels of window ".e" could be read: the region is off screen or covered} {TK CAPTURE OFFSCREEN}} {{no pixels of window ".e" could be read: the region is off screen or covered} {TK CAPTURE OFFSCREEN}} 1 7 {18 52 86}}
+
+test capture-9.2.1 {-nocomplain allows an entirely transparent image} -constraints {
+    x11
+} -setup {
+    # The window itself, not the compositing manager's buffer.
+    set ::tkcapture::forceFallback 1
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+-40+50
+    showTop .e
+} -body {
+    set img [tkcapture::capture .e -region {0 0 30 20} -nocomplain 1]
+    set on [tkcapture::capture .e -region {40 0 100 60} -nocomplain 1]
+    list [image width $img] [image height $img] [$img get 0 0 -withalpha] \
+	[$img get 29 19 -withalpha] \
+	[dict get [$img cget -metadata] capture complete] \
+	[dict get [$on cget -metadata] capture complete]
+} -cleanup {
+    unset ::tkcapture::forceFallback
+    image delete $img $on
+    destroy .e
+} -result {30 20 {0 0 0 0} {0 0 0 0} 0 1}
+
+test capture-9.3 {off screen at the lower right} -constraints x11 -setup {
+    # The window itself, not the compositing manager's buffer.
+    set ::tkcapture::forceFallback 1
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+[expr {[winfo screenwidth .] - 70}]+[expr {
+	    [winfo screenheight .] - 25}]
+    showTop .e
+} -body {
+    set img [tkcapture::capture .e]
+    list [$img get 0 0 -withalpha] [$img get 69 24 -withalpha] \
+	[$img get 70 24 -withalpha] [$img get 69 25 -withalpha]
+} -cleanup {
+    unset ::tkcapture::forceFallback
+    image delete $img
+    destroy .e
+} -result {{255 0 0 255} {255 0 0 255} {0 0 0 0} {0 0 0 0}}
+
+test capture-9.4 {a covered window is captured without its cover} -constraints {
+    occlusionProof
+} -setup {
+    toplevel .e -background #ff0000
+    wm geometry .e 100x60+60+60
+    showTop .e
+    toplevel .cover -background #0000ff
+    wm geometry .cover 100x60+90+80
+    showTop .cover
+    raise .cover .e
+    update
+} -body {
+    set img [tkcapture::capture .e]
+    list [$img get 5 5] [$img get 50 40] [$img get 99 59]
+} -cleanup {
+    image delete $img
+    destroy .cover .e
+} -result {{255 0 0} {255 0 0} {255 0 0}}
+
+test capture-9.4.1 {pixels of a covering window are never returned} -setup {
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+60+60
+    showTop .e
+    toplevel .cover -background #0000ff
+    wm overrideredirect .cover 1
+    wm geometry .cover 100x60+110+80
+    showTop .cover
+    raise .cover .e
+    update
+} -body {
+    # Where .cover lies over .e, a pixel is the window's own (red) under
+    # a compositing manager and transparent otherwise.
+    set img [tkcapture::capture .e]
+    set covered [$img get 75 40 -withalpha]
+    list [$img get 5 5 -withalpha] [$img get 49 59 -withalpha] \
+	[expr {$covered in {{255 0 0 255} {0 0 0 0}}}] \
+	[expr {[dict get [$img cget -metadata] capture complete]
+		== ($covered eq {255 0 0 255})}]
+} -cleanup {
+    image delete $img
+    destroy .cover .e
+} -result {{255 0 0 255} {255 0 0 255} 1 1}
+
+test capture-9.4.2 {a fully covered window} -constraints x11 -setup {
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+60+60
+    showTop .e
+    toplevel .cover -background #0000ff
+    wm overrideredirect .cover 1
+    wm geometry .cover 120x80+50+50
+    showTop .cover
+    raise .cover .e
+    update
+} -body {
+    # Red under a compositing manager; an error otherwise, and with
+    # -nocomplain a transparent image.
+    set code [catch {tkcapture::capture .e} img options]
+    if {$code} {
+	set result [list [dict get $options -errorcode]]
+	set img [tkcapture::capture .e -nocomplain 1]
+	lappend result [$img get 50 30 -withalpha]
+    } else {
+	set result [list {TK CAPTURE OFFSCREEN} \
+		[expr {[$img get 50 30] eq {255 0 0} ? {0 0 0 0} : "leak"}]]
+    }
+    set result
+} -cleanup {
+    image delete $img
+    destroy .cover .e
+} -result {{TK CAPTURE OFFSCREEN} {0 0 0 0}}
+
+test capture-9.4.3 {an embedded toplevel is clipped to its container} -setup {
+    toplevel .e -background #ffffff
+    wm geometry .e 160x120+40+40
+    frame .e.box -container 1
+    showTop .e
+    # Windows widens a toplevel to a minimum width, so the container is
+    # placed relative to the actual size.
+    place .e.box -x [expr {[winfo width .e] - 60}] \
+	-y [expr {[winfo height .e] - 40}] -width 80 -height 60
+    update
+    toplevel .emb -use [winfo id .e.box] -background #ff0000
+    frame .emb.big -background #ff0000 -width 400 -height 300
+    pack .emb.big
+    update
+    showTop .emb
+} -body {
+    # The container is 80x60, of which 60x40 lie inside .e.
+    set img [tkcapture::capture .emb -region {-10 -10 1000 1000}]
+    set part [tkcapture::capture .emb.big]
+    set md [dict get [$img cget -metadata] capture]
+    list [image width $img] [image height $img] [dict get $md x] \
+	[dict get $md y] [dict get $md complete] [$img get 0 0 -withalpha] \
+	[$img get 59 39 -withalpha] [image width $part] [image height $part] \
+	[lindex [errorInfo {tkcapture::capture .emb \
+		-region {60 0 100 10}}] 1]
+} -cleanup {
+    image delete $img $part
+    destroy .emb .e
+} -result {60 40 0 0 1 {255 0 0 255} {255 0 0 255} 60 40 {TK CAPTURE EMPTY_REGION}}
+
+test capture-9.4.4 {a widget of the host over an embedded toplevel is masked} -constraints {
+    overlayMasked
+} -setup {
+    toplevel .e -background #ffffff
+    wm geometry .e 160x120+40+40
+    frame .e.box -container 1
+    place .e.box -x 30 -y 20 -width 80 -height 60
+    showTop .e
+    toplevel .emb -use [winfo id .e.box] -background #ff0000
+    update
+    showTop .emb
+    frame .e.over -background #0000ff -width 40 -height 60
+    place .e.over -x 70 -y 20
+    raise .e.over
+    update
+} -body {
+    set img [tkcapture::capture .emb]
+    set host [tkcapture::capture .e]
+    list [image width $img] [$img get 39 30 -withalpha] \
+	[$img get 40 30 -withalpha] [$img get 79 59 -withalpha] \
+	[dict get [$img cget -metadata] capture complete] \
+	[$host get 75 30] [$host get 65 30]
+} -cleanup {
+    image delete $img $host
+    destroy .emb .e
+} -result {80 {255 0 0 255} {0 0 0 0} {0 0 0 0} 0 {0 0 255} {255 0 0}}
+
+test capture-9.5 {a partly visible region is not an error} -constraints x11 -setup {
+    # The window itself, not the compositing manager's buffer.
+    set ::tkcapture::forceFallback 1
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+-40+50
+    showTop .e
+} -body {
+    # Exactly one column of the region is on screen.
+    set img [tkcapture::capture .e -region {0 0 41 20}]
+    list [image width $img] [$img get 39 10 -withalpha] \
+	[$img get 40 10 -withalpha] \
+	[dict get [$img cget -metadata] capture complete]
+} -cleanup {
+    unset ::tkcapture::forceFallback
+    image delete $img
+    destroy .e
+} -result {41 {0 0 0 0} {255 0 0 255} 0}
+
+test capture-9.6 {a window partly off screen is read at once} -constraints {
+    win32
+} -setup {
+    toplevel .e -background #00ff00
+    wm geometry .e 200x100+-120+200
+    showTop .e
+} -body {
+    # Windows asks for the part off screen to be painted only when the
+    # capture renders it.
+    set img [tkcapture::capture .e]
+    list [$img get 2 5 -withalpha] [$img get 150 50 -withalpha] \
+	[dict get [$img cget -metadata] capture complete]
+} -cleanup {
+    image delete $img
+    destroy .e
+} -result {{0 255 0 255} {0 255 0 255} 1}
+
+test capture-9.7 {-update 0 leaves unpainted parts alone} -constraints {
+    win32
+} -setup {
+    toplevel .e -background #00ff00
+    wm geometry .e 200x100+-120+200
+    showTop .e
+} -body {
+    set img [tkcapture::capture .e -update 0]
+    list [expr {[$img get 2 5] ne {0 255 0}}] [tkcapture::_expose .e] \
+	[tkcapture::_expose .e]
+} -cleanup {
+    image delete $img
+    destroy .e
+} -result {1 1 0}
+
+test capture-9.8 {composited: the part of a window off the screen is read} -constraints {
+    xcomposite
+} -setup {
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+-40+50
+    frame .e.f -background #0000ff -width 10 -height 10
+    place .e.f -x 0 -y 0
+    showTop .e
+} -body {
+    set img [tkcapture::capture .e]
+    list [expr {[winfo rootx .e] < 0}] [$img get 2 2 -withalpha] \
+	[$img get 20 30 -withalpha] [$img get 99 59 -withalpha] \
+	[dict get [$img cget -metadata] capture complete]
+} -cleanup {
+    image delete $img
+    destroy .e
+} -result {1 {0 0 255 255} {255 0 0 255} {255 0 0 255} 1}
+
+test capture-9.9 {composited: a window entirely off the screen is read} -constraints {
+    xcomposite
+} -setup {
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+-3000+50
+    update
+    if {![winfo viewable .e]} {
+	tkwait visibility .e
+    }
+    update
+} -body {
+    set img [tkcapture::capture .e]
+    list [$img get 0 0 -withalpha] [$img get 99 59 -withalpha] \
+	[dict get [$img cget -metadata] capture complete]
+} -cleanup {
+    image delete $img
+    destroy .e
+} -result {{255 0 0 255} {255 0 0 255} 1}
+
+test capture-9.10 {composited: a new toplevel is read before it is placed} -constraints {
+    xcomposite
+} -body {
+    # Some window managers map a new toplevel off the screen and move it
+    # into place a moment later; the capture must not depend on that.
+    set result {}
+    for {set i 0} {$i < 10} {incr i} {
+	toplevel .e -background #00ff00
+	wm geometry .e 120x80+100+100
+	update
+	if {![winfo viewable .e]} {
+	    tkwait visibility .e
+	}
+	update
+	if {[catch {tkcapture::capture .e} img]} {
+	    lappend result $img
+	} else {
+	    lappend result [$img get 60 40]
+	    image delete $img
+	}
+	destroy .e
+    }
+    lsort -unique $result
+} -cleanup {
+    destroy .e
+} -result {{0 255 0}}
+
+test capture-9.11 {composited: a covered window is captured without its cover} -constraints {
+    xcomposite
+} -setup {
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+60+60
+    showTop .e
+    toplevel .cover -background #0000ff
+    wm overrideredirect .cover 1
+    wm geometry .cover 100x60+90+80
+    showTop .cover
+    raise .cover .e
+    update
+} -body {
+    set img [tkcapture::capture .e]
+    list [$img get 50 40] [$img get 99 59] \
+	[dict get [$img cget -metadata] capture complete]
+} -cleanup {
+    image delete $img
+    destroy .cover .e
+} -result {{255 0 0} {255 0 0} 1}
+
+#
+# macOS: the backing bitmap and the fallback without it.
+#
+
+makeTop
+
+test capture-10.1 {aqua: device scale is a whole multiple} -constraints aqua -body {
+    set img [tkcapture::capture .t -scale device]
+    set scale [dict get [$img cget -metadata] capture scale]
+    list [expr {$scale in {1.0 2.0 3.0}}] \
+	[expr {[image width $img] == int(200 * $scale)}] \
+	[expr {[image height $img] == int(120 * $scale)}] \
+	[$img get 0 0] \
+	[$img get [expr {[image width $img] - 1}] \
+	    [expr {[image height $img] - 1}]] \
+	[$img get [expr {int(125 * $scale)}] [expr {int(15 * $scale)}]]
+} -cleanup {
+    image delete $img
+} -result {1 1 1 {255 0 0} {0 255 0} {255 255 255}}
+
+test capture-10.2 {aqua: device and logical captures agree} -constraints aqua -body {
+    set logical [tkcapture::capture .t]
+    set device [tkcapture::capture .t -scale device]
+    set scale [expr {int([dict get [$device cget -metadata] capture scale])}]
+    set same 1
+    foreach {x y} {0 0 99 119 100 0 120 10 125 15 134 24 135 25 199 119} {
+	if {[$logical get $x $y]
+		ne [$device get [expr {$x * $scale}] [expr {$y * $scale}]]} {
+	    set same 0
+	}
+    }
+    set same
+} -cleanup {
+    image delete $logical $device
+} -result 1
+
+test capture-10.3 {aqua: fallback without the backing bitmap} -constraints aqua -setup {
+    set ::tkcapture::forceFallback 1
+} -body {
+    set img [tkcapture::capture .t -scale device]
+    set part [tkcapture::capture .t.b.c]
+    list [image width $img] [image height $img] \
+	[dict get [$img cget -metadata] capture scale] [$img get 0 0] \
+	[$img get 199 119] [$img get 120 10] [$img get 125 15] \
+	[$img get 0 0 -withalpha] [samePixels $img $part 120 10]
+} -cleanup {
+    unset ::tkcapture::forceFallback
+    image delete $img $part
+} -result {200 120 1.0 {255 0 0} {0 255 0} {0 0 255} {255 255 255} {255 0 0 255} 1}
+
+test capture-10.4 {aqua: -menubar is ignored} -constraints aqua -setup {
+    menu .t.m
+    .t.m add cascade -label File
+    .t configure -menu .t.m
+    update
+} -body {
+    set img [tkcapture::capture .t -menubar 1]
+    list [image width $img] [image height $img] \
+	[dict get [$img cget -metadata] capture y]
+} -cleanup {
+    image delete $img
+    .t configure -menu {}
+    destroy .t.m
+} -result {200 120 0}
+
+test capture-10.5 {aqua: the part of a window off the screen is read} -constraints {
+    aqua
+} -setup {
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+[expr {[winfo screenwidth .] - 50}]+200
+    showTop .e
+} -body {
+    set img [tkcapture::capture .e]
+    list [expr {[winfo rootx .e] + 100 > [winfo screenwidth .]}] \
+	[$img get 5 5 -withalpha] [$img get 99 59 -withalpha] \
+	[dict get [$img cget -metadata] capture complete]
+} -cleanup {
+    image delete $img
+    destroy .e
+} -result {1 {255 0 0 255} {255 0 0 255} 1}
+
+test capture-10.6 {aqua: a window that Tk does not draw is off screen} -constraints {
+    aqua
+} -setup {
+    # A window placed beyond every screen gets no backing bitmap, so Tk
+    # draws nothing and its XGetImage fails as well.
+    toplevel .e -background #ff0000
+    wm overrideredirect .e 1
+    wm geometry .e 100x60+30000+200
+    showTop .e
+} -body {
+    set img [tkcapture::capture .e -nocomplain 1]
+    list [errorInfo {tkcapture::capture .e}] [image width $img] \
+	[image height $img] [$img get 50 30 -withalpha] \
+	[dict get [$img cget -metadata] capture complete]
+} -cleanup {
+    image delete $img
+    destroy .e
+} -result {{{no pixels of window ".e" could be read: the region is off screen or covered} {TK CAPTURE OFFSCREEN}} 100 60 {0 0 0 0} 0}
+
+destroy .t
+cleanupTests
+return

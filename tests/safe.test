@@ -1,0 +1,559 @@
+# safe.test --
+#
+#	Tests for tkcapture in safe interpreters with Safe Tk.
+#
+# Copyright © 2026 Bandoti Ltd.
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+
+package require tcltest 2.5
+namespace import ::tcltest::*
+loadTestedCommands
+package require Tk
+package require tkcapture
+
+if {[winfo visual .] in {staticgray grayscale}} {
+    # The tests rely on colours.
+    cleanupTests
+    return
+}
+
+testConstraint x11 [expr {[tk windowingsystem] eq "x11"}]
+
+# Windows of the application stacked over an embedded toplevel are masked
+# on X11 and Windows, not on macOS (see PLATFORM NOTES in the manual page).
+# There, -constraints knownBug runs the tests to show the failure.
+testConstraint overlayMasked [expr {[tk windowingsystem] ne "aqua"
+	|| [testConstraint knownBug]}]
+
+wm geometry . +400+400
+
+# The shared library, as loaded into this interpreter, and the script
+# of the package in the source tree.
+
+set libFile ""
+foreach entry [info loaded {}] {
+    if {[lindex $entry 1] eq "Tkcapture"} {
+	set libFile [lindex $entry 0]
+    }
+}
+set scriptFile [file join [file dirname [file dirname [file normalize \
+	[info script]]]] library tkcapture.tcl]
+
+# The package index and the script as an installation has them next to
+# the shared library; a build directory has only the former.
+testConstraint packageDir [expr {$libFile ne "" && [file exists \
+	[file join [file dirname $libFile] pkgIndex.tcl]]}]
+
+# errorInfo --
+#
+#	Runs a script that is expected to fail; returns the message and
+#	the error code.
+
+proc errorInfo {script} {
+    if {![catch {uplevel 1 $script} message options]} {
+	return [list "no error" $message]
+    }
+    return [list $message [dict get $options -errorcode]]
+}
+
+# settle --
+#
+#	Waits until a toplevel is displayed and in place.
+
+proc settle {top} {
+    raise $top
+    update
+    if {![winfo viewable $top]} {
+	tkwait visibility $top
+    }
+    update
+    for {set i 0} {$i < 200 && ([winfo rootx $top] < -10000
+	    || [winfo rooty $top] < -10000)} {incr i} {
+	after 10
+	update
+    }
+}
+
+# makeHost --
+#
+#	Creates the white toplevel .host, 200x150 pixels, with the
+#	container frame .host.box of 120x80 pixels at (x, y). The size
+#	is fixed: a container otherwise follows the size that the embedded
+#	toplevel requests.
+
+proc makeHost {{x 20} {y 10}} {
+    destroy .host
+    toplevel .host -background #ffffff
+    wm geometry .host 200x150+30+30
+    frame .host.box -container 1
+    place .host.box -x $x -y $y -width 120 -height 80
+    settle .host
+}
+
+# makeSafe --
+#
+#	Creates a safe interpreter with Safe Tk in .host.box and with
+#	tkcapture loaded. Its main window is red and holds a green frame
+#	.f of 40x30 at (10, 10). Returns the name of the interpreter.
+
+proc makeSafe {} {
+    set child [safe::interpCreate]
+    safe::loadTk $child -use .host.box
+    load $::libFile Tkcapture $child
+    interp invokehidden $child source -encoding utf-8 $::scriptFile
+    $child eval {
+	. configure -background #ff0000
+	frame .f -background #00ff00 -width 40 -height 30
+	place .f -x 10 -y 10
+	update
+    }
+    update
+    for {set i 0} {$i < 200 && ![$child eval {winfo viewable .}]} {incr i} {
+	after 10
+	update
+    }
+    return $child
+}
+
+#
+# Loading and the command set.
+#
+
+makeHost
+set child [makeSafe]
+
+test safe-1.1 {the package is provided in a safe interpreter} -body {
+    $child eval {
+	list [interp issafe] [package present tkcapture]
+    }
+} -result [list 1 [package present tkcapture]]
+
+test safe-1.2 {all commands but save exist} -body {
+    $child eval {
+	list [lsort [lmap c [info commands ::tkcapture::*] {
+	    namespace tail $c
+	}]] [lsort [namespace eval ::tkcapture {namespace export}]]
+    }
+} -result {{CheckWindow ParseOptions _expose _grab capture layout locate pkgconfig png} {capture layout locate png}}
+
+test safe-1.3 {save is not available} -body {
+    $child eval {
+	catch {tkcapture::save . out.png} message
+	set message
+    }
+} -result {invalid command name "tkcapture::save"}
+
+test safe-1.4 {a captured image cannot be written to a file} -body {
+    $child eval {
+	set img [tkcapture::capture .]
+	set code [catch {$img write out.png} message]
+	image delete $img
+	list $code $message
+    }
+} -result {1 {can't write image to a file in a safe interpreter}}
+
+test safe-1.5 {the trusted interpreter keeps save} -body {
+    list [namespace which -command ::tkcapture::save] \
+	[expr {"save" in [namespace eval ::tkcapture {namespace export}]}]
+} -result {::tkcapture::save 1}
+
+test safe-1.6 {package require through the access path} -constraints {
+    packageDir
+} -setup {
+    set dir [makeDirectory tkcapture-safe]
+    file copy -force $libFile [file join [file dirname $libFile] \
+	    pkgIndex.tcl] $scriptFile $dir
+    # A safe interpreter searches the directories of the trusted
+    # interpreter's auto_path, as they are when it is created. The
+    # directory of the loaded library is left out, so that the copy is
+    # the one found.
+    set savedPath $::auto_path
+    set libDir [file normalize [file dirname $libFile]]
+    set ::auto_path {}
+    foreach entry $savedPath {
+	if {[file normalize $entry] ne $libDir} {
+	    lappend ::auto_path $entry
+	}
+    }
+    lappend ::auto_path $dir
+    set other [safe::interpCreate]
+    set ::auto_path $savedPath
+    toplevel .host2
+    wm geometry .host2 100x80+300+30
+    # Placed with a fixed size: Windows may widen the toplevel to a
+    # minimum width.
+    frame .host2.box -container 1
+    place .host2.box -x 0 -y 0 -width 100 -height 80
+    settle .host2
+    safe::loadTk $other -use .host2.box
+} -body {
+    concat [$other eval {
+	. configure -background #0000ff
+	set version [package require tkcapture]
+	update
+	set img [tkcapture::capture .]
+	list [interp issafe] [image width $img] [image height $img] \
+	    [$img get 50 40]
+    }] [expr {[file normalize [lindex [lsearch -inline -index 1 \
+	    [info loaded $other] Tkcapture] 0]]
+	    eq [file normalize [file join $dir [file tail $libFile]]]}]
+} -cleanup {
+    safe::interpDelete $other
+    destroy .host2
+    # Windows can't delete a loaded library, and Tcl doesn't unload it.
+    catch {removeDirectory tkcapture-safe}
+} -result {1 100 80 {0 0 255} 1}
+
+#
+# Capturing.
+#
+
+test safe-2.1 {capture of the main window} -body {
+    $child eval {
+	set img [tkcapture::capture .]
+	set result [list [image width $img] [image height $img] \
+		[$img get 0 0 -withalpha] [$img get 119 79 -withalpha] \
+		[$img get 10 10] [$img get 49 39] [$img get 50 40]]
+	image delete $img
+	set result
+    }
+} -result {120 80 {255 0 0 255} {255 0 0 255} {0 255 0} {0 255 0} {255 0 0}}
+
+test safe-2.2 {capture of a widget with a margin} -body {
+    $child eval {
+	set img [tkcapture::capture .f -region {-5 -5 45 35}]
+	set md [dict get [$img cget -metadata] capture]
+	set result [list [image width $img] [image height $img] \
+		[$img get 0 0] [$img get 5 5] [dict get $md window] \
+		[dict get $md toplevel] [dict get $md x] [dict get $md y] \
+		[dict get $md complete] \
+		[expr {[dict get $md rootx] == [winfo rootx .f] - 5}]]
+	image delete $img
+	set result
+    }
+} -result {50 40 {255 0 0} {0 255 0} .f . -5 -5 1 1}
+
+test safe-2.3 {png data can be handed to the trusted interpreter} -body {
+    set before [lsort [$child eval {image names}]]
+    set img [image create photo -data [$child eval {tkcapture::png .}]]
+    list [image width $img] [image height $img] [$img get 0 0] \
+	[$img get 15 15] \
+	[expr {[lsort [$child eval {image names}]] eq $before}]
+} -cleanup {
+    image delete $img
+} -result {120 80 {255 0 0} {0 255 0} 1}
+
+test safe-2.4 {the capture equals what the host displays there} -body {
+    set host [tkcapture::capture .host -region {20 10 140 90}]
+    set inner [image create photo -data [$child eval {tkcapture::png .}]]
+    expr {[$host data] eq [$inner data]}
+} -cleanup {
+    image delete $host $inner
+} -result 1
+
+test safe-2.5 {-photo, -update and errors work as in a trusted interpreter} -body {
+    $child eval {
+	set before [lsort [image names]]
+	image create photo snap
+	set result [list [tkcapture::capture .f -photo snap -update 0] \
+		[image width snap] [image height snap]]
+	foreach script {
+	    {tkcapture::capture .f -region {5 5 5 5}}
+	    {tkcapture::capture .nope}
+	    {tkcapture::capture . -photo nosuchimage}
+	    {tkcapture::capture . -bogus 1}
+	} {
+	    catch $script message options
+	    lappend result [dict get $options -errorcode]
+	}
+	image delete snap
+	lappend result [expr {[lsort [image names]] eq $before}]
+    }
+} -result {snap 40 30 {TK CAPTURE EMPTY_REGION} {TK LOOKUP WINDOW .nope} {TK LOOKUP PHOTO nosuchimage} {TCL LOOKUP INDEX option -bogus} 1}
+
+test safe-2.6 {-menubar is ignored} -body {
+    $child eval {
+	set img [tkcapture::capture . -menubar 1]
+	set result [list [image width $img] [image height $img] \
+		[dict get [$img cget -metadata] capture y]]
+	image delete $img
+	set result
+    }
+} -result {120 80 0}
+
+test safe-2.7 {layout and locate} -body {
+    $child eval {
+	set img [tkcapture::capture .]
+	set result [list [dict keys [tkcapture::layout .]] \
+		[dict get [tkcapture::layout .] .f] \
+		[tkcapture::locate $img 15 20] [tkcapture::locate $img 100 70]]
+	image delete $img
+	set result
+    }
+} -result {{. .f} {class Frame x 10 y 10 width 40 height 30} {window .f x 5 y 10} {window . x 100 y 70}}
+
+#
+# What a safe interpreter must not see.
+#
+
+test safe-3.1 {windows of the trusted interpreter cannot be named} -body {
+    $child eval {
+	set result {}
+	foreach window {.host .host.box} {
+	    catch {tkcapture::capture $window} message options
+	    lappend result [dict get $options -errorcode]
+	}
+	set result
+    }
+} -result {{TK LOOKUP WINDOW .host} {TK LOOKUP WINDOW .host.box}}
+
+test safe-3.2 {a region cannot reach beyond the container} -body {
+    $child eval {
+	set img [tkcapture::capture . -region {-1000 -1000 1000 1000}]
+	set md [dict get [$img cget -metadata] capture]
+	set result [list [image width $img] [image height $img] \
+		[dict get $md x] [dict get $md y]]
+	image delete $img
+	set result
+    }
+} -result {120 80 0 0}
+
+test safe-3.3 {a main window larger than the container} -setup {
+    $child eval {
+	frame .big -background #ff0000 -width 600 -height 500
+	pack .big
+	update
+    }
+    update
+} -body {
+    $child eval {
+	set img [tkcapture::capture . -region {0 0 600 500}]
+	set part [tkcapture::capture .big]
+	set result [list [image width $img] [image height $img] \
+		[image width $part] [image height $part] \
+		[$img get 119 79 -withalpha] \
+		[dict get [$img cget -metadata] capture complete]]
+	foreach region {{120 0 200 80} {0 80 120 200}} {
+	    catch {tkcapture::capture . -region $region} message options
+	    lappend result [dict get $options -errorcode]
+	}
+	image delete $img $part
+	set result
+    }
+} -cleanup {
+    $child eval {destroy .big}
+    update
+} -result {120 80 120 80 {255 0 0 255} 1 {TK CAPTURE EMPTY_REGION} {TK CAPTURE EMPTY_REGION}}
+
+test safe-3.4 {a widget of the host over the container is not captured} -constraints {
+    overlayMasked
+} -setup {
+    frame .host.secret -background #0000ff -width 60 -height 150
+    place .host.secret -x 80 -y 0
+    raise .host.secret
+    update
+} -body {
+    # The container starts at x 20: the blue frame covers it from 60 on.
+    $child eval {
+	set img [tkcapture::capture .]
+	set blue 0
+	for {set x 0} {$x < 120} {incr x} {
+	    for {set y 0} {$y < 80} {incr y 7} {
+		if {[$img get $x $y] eq {0 0 255}} {
+		    incr blue
+		}
+	    }
+	}
+	set result [list $blue [$img get 59 40 -withalpha] \
+		[$img get 60 40 -withalpha] [$img get 119 79 -withalpha] \
+		[dict get [$img cget -metadata] capture complete]]
+	image delete $img
+	set result
+    }
+} -cleanup {
+    destroy .host.secret
+    update
+} -result {0 {255 0 0 255} {0 0 0 0} {0 0 0 0} 0}
+
+test safe-3.5 {another toplevel over the container is not captured} -setup {
+    toplevel .cover -background #0000ff
+    wm overrideredirect .cover 1
+    wm geometry .cover 100x200+[expr {[winfo rootx .host.box] + 60}]+[expr {
+	    [winfo rooty .host.box] - 20}]
+    settle .cover
+    raise .cover
+    update
+} -body {
+    # Under the cover a pixel is the window's own, or transparent where
+    # the window system cannot deliver it; never the cover's.
+    $child eval {
+	set img [tkcapture::capture .]
+	set result [list [$img get 30 40 -withalpha] \
+		[expr {[$img get 90 40 -withalpha]
+			in {{255 0 0 255} {0 0 0 0}}}]]
+	image delete $img
+	set result
+    }
+} -cleanup {
+    destroy .cover
+    update
+} -result {{255 0 0 255} 1}
+
+test safe-3.5.1 {a container that is not displayed} -setup {
+    place forget .host.box
+    update
+} -body {
+    # The host now shows its own background where the container was.
+    $child eval {
+	set result {}
+	foreach script {
+	    {tkcapture::capture .}
+	    {tkcapture::capture .f -nocomplain 1}
+	    {tkcapture::png .}
+	} {
+	    catch $script message options
+	    lappend result [dict get $options -errorcode]
+	}
+	set result
+    }
+} -cleanup {
+    place .host.box -x 20 -y 10 -width 120 -height 80
+    update
+} -result {{TK CAPTURE UNMAPPED} {TK CAPTURE UNMAPPED} {TK CAPTURE UNMAPPED}}
+
+test safe-3.5.2 {the container is displayed again} -body {
+    $child eval {
+	set img [tkcapture::capture .]
+	set result [list [image width $img] [image height $img] \
+		[$img get 0 0 -withalpha]]
+	image delete $img
+	set result
+    }
+} -result {120 80 {255 0 0 255}}
+
+safe::interpDelete $child
+
+test safe-3.6 {a container that is partly outside its toplevel} -setup {
+    makeHost 150 100
+    set child [makeSafe]
+} -body {
+    # 50x50 pixels of the 120x80 container lie inside the 200x150 host.
+    $child eval {
+	set img [tkcapture::capture .]
+	set result [list [image width $img] [image height $img] \
+		[$img get 0 0 -withalpha] [$img get 49 49 -withalpha] \
+		[$img get 15 15] \
+		[dict get [$img cget -metadata] capture complete]]
+	catch {tkcapture::capture . -region {50 0 120 80}} message options
+	lappend result [dict get $options -errorcode]
+	image delete $img
+	set result
+    }
+} -cleanup {
+    safe::interpDelete $child
+} -result {50 50 {255 0 0 255} {255 0 0 255} {0 255 0} 1 {TK CAPTURE EMPTY_REGION}}
+
+test safe-3.7 {a container inside a clipping frame} -setup {
+    destroy .host
+    toplevel .host -background #ffffff
+    wm geometry .host 200x150+30+30
+    frame .host.clip -background #ffffff -borderwidth 0
+    place .host.clip -x 20 -y 10 -width 70 -height 40
+    frame .host.clip.box -container 1
+    place .host.clip.box -x -30 -y -20 -width 120 -height 80
+    settle .host
+    rename makeSafe makeSafe.orig
+    proc makeSafe {} {
+	set child [safe::interpCreate]
+	safe::loadTk $child -use .host.clip.box
+	load $::libFile Tkcapture $child
+	interp invokehidden $child source -encoding utf-8 $::scriptFile
+	$child eval {
+	    . configure -background #ff0000
+	    frame .f -background #00ff00 -width 40 -height 30
+	    place .f -x 10 -y 10
+	    update
+	}
+	update
+	return $child
+    }
+    set child [makeSafe]
+    update
+} -body {
+    # The visible part of the 120x80 window is 70x40 at (30, 20).
+    $child eval {
+	set img [tkcapture::capture .]
+	set md [dict get [$img cget -metadata] capture]
+	set result [list [image width $img] [image height $img] \
+		[dict get $md x] [dict get $md y] [$img get 0 0] \
+		[$img get 19 19] [$img get 20 20] [$img get 69 39]]
+	image delete $img
+	set result
+    }
+} -cleanup {
+    safe::interpDelete $child
+    rename makeSafe {}
+    rename makeSafe.orig makeSafe
+} -result {70 40 30 20 {0 255 0} {0 255 0} {255 0 0} {255 0 0}}
+
+test safe-3.8 {a container of another application is refused} -constraints {
+    x11
+} -setup {
+    # A second process provides a window to embed into.
+    set script [makeFile {
+	package require Tk
+	wm geometry . 150x100+300+200
+	update
+	if {![winfo viewable .]} {
+	    tkwait visibility .
+	}
+	for {set i 0} {$i < 200 && [winfo rootx .] < -10000} {incr i} {
+	    after 10
+	    update
+	}
+	puts [winfo id .]
+	flush stdout
+	fileevent stdin readable {exit}
+	vwait forever
+    } foreign.tcl]
+    set pipe [open |[list [interpreter] $script] r+]
+    set foreign [gets $pipe]
+    set other [safe::interpCreate]
+    safe::loadTk $other -use $foreign
+    load $libFile Tkcapture $other
+    interp invokehidden $other source -encoding utf-8 $scriptFile
+    $other eval {
+	. configure -background #ff0000
+	update
+    }
+    update
+} -body {
+    # The geometry of what surrounds the toplevel is unknown, so a safe
+    # interpreter gets nothing; a trusted one is not refused.
+    set result [list [$other eval {
+	catch {tkcapture::capture .} message options
+	list $message [dict get $options -errorcode] \
+	    [catch {tkcapture::capture . -nocomplain 1}] \
+	    [catch {tkcapture::png .}]
+    }]]
+    interp marktrusted $other
+    lappend result [$other eval {
+	if {[catch {tkcapture::capture .} img options]} {
+	    lindex [dict get $options -errorcode] 2
+	} else {
+	    image delete $img
+	    list captured
+	}
+    }]
+} -cleanup {
+    interp delete $other
+    catch {puts $pipe quit; flush $pipe}
+    catch {close $pipe}
+    removeFile foreign.tcl
+} -result {{{can't capture a window that is embedded in another application from a safe interpreter} {TK CAPTURE UNSUPPORTED} 1 1} captured}
+
+destroy .host
+cleanupTests
+return

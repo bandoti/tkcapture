@@ -1,0 +1,410 @@
+# helpers.test --
+#
+#	Tests for tkcapture::save, tkcapture::png, tkcapture::layout and
+#	tkcapture::locate.
+#
+# Copyright © 2026 Bandoti Ltd.
+#
+# See the file "license.terms" for information on usage and redistribution of
+# this file, and for a DISCLAIMER OF ALL WARRANTIES.
+
+package require tcltest 2.5
+namespace import ::tcltest::*
+loadTestedCommands
+package require Tk
+package require tkcapture
+
+if {[winfo visual .] in {staticgray grayscale}} {
+    # The tests rely on colours.
+    cleanupTests
+    return
+}
+
+wm geometry . +400+400
+
+# errorInfo --
+#
+#	Runs a script that is expected to fail; returns the message and
+#	the error code.
+
+proc errorInfo {script} {
+    if {![catch {uplevel 1 $script} message options]} {
+	return [list "no error" $message]
+    }
+    return [list $message [dict get $options -errorcode]]
+}
+
+# The toplevel .t, 200x120 pixels: a red frame .t.a on the left, a green
+# frame .t.b on the right, and a blue frame .t.b.c of 40x30 at (20, 10)
+# in .t.b.
+
+toplevel .t
+wm geometry .t 200x120+30+30
+frame .t.a -background #ff0000 -width 100 -height 120
+frame .t.b -background #00ff00 -width 100 -height 120
+place .t.a -x 0 -y 0
+place .t.b -x 100 -y 0
+frame .t.b.c -background #0000ff -width 40 -height 30
+place .t.b.c -x 20 -y 10
+raise .t
+update
+if {![winfo viewable .t]} {
+    tkwait visibility .t
+}
+update
+# Some window managers map a window far off screen and move it to its
+# place a moment later.
+for {set i 0} {$i < 200 && ([winfo rootx .t] < -10000
+	|| [winfo rooty .t] < -10000)} {incr i} {
+    after 10
+    update
+}
+
+set dir [makeDirectory tkcapture-helpers]
+
+#
+# save
+#
+
+test save-1.1 {writes a PNG file and returns its name} -body {
+    set file [file join $dir one.png]
+    set result [tkcapture::save .t $file]
+    set img [image create photo -file $file]
+    list [expr {$result eq $file}] [image width $img] [image height $img] \
+	[$img get 10 10] [$img get 150 60] [$img get 125 15]
+} -cleanup {
+    image delete $img
+} -result {1 200 120 {255 0 0} {0 255 0} {0 0 255}}
+
+test save-1.2 {leaves no image behind} -body {
+    set before [lsort [image names]]
+    tkcapture::save .t [file join $dir two.png]
+    expr {[lsort [image names]] eq $before}
+} -result 1
+
+test save-1.3 {capture options are passed on} -body {
+    set file [file join $dir three.png]
+    tkcapture::save .t.b.c $file -region {-5 -5 45 35} -update 0
+    set img [image create photo -file $file]
+    list [image width $img] [image height $img] [$img get 0 0] \
+	[$img get 5 5]
+} -cleanup {
+    image delete $img
+} -result {50 40 {0 255 0} {0 0 255}}
+
+test save-1.4 {format follows the file extension} -body {
+    set result {}
+    foreach {name signature} {a.gif GIF8 a.GIF GIF8 a.ppm "P6\n4" a.png "\x89PNG"
+	    noextension "\x89PNG"} {
+	set file [file join $dir $name]
+	tkcapture::save .t.b.c $file
+	set f [open $file rb]
+	lappend result [expr {[read $f 4] eq $signature}]
+	close $f
+    }
+    set result
+} -result {1 1 1 1 1}
+
+test save-1.5 {-format overrides the file extension} -body {
+    set file [file join $dir really-gif.png]
+    tkcapture::save .t.b.c $file -format gif
+    set f [open $file rb]
+    set signature [read $f 4]
+    close $f
+    set signature
+} -result GIF8
+
+test save-1.6 {-format between capture options} -body {
+    set file [file join $dir four.dat]
+    tkcapture::save .t $file -region {0 0 10 10} -format png -update 1
+    set img [image create photo -file $file]
+    list [image width $img] [image height $img]
+} -cleanup {
+    image delete $img
+} -result {10 10}
+
+test save-1.7 {unknown format} -body {
+    set before [lsort [image names]]
+    set file [file join $dir a.nosuchformat]
+    list [catch {tkcapture::save .t $file} message] $message \
+	[file exists $file] [expr {[lsort [image names]] eq $before}]
+} -result {1 {image file format "nosuchformat" is unknown} 0 1}
+
+test save-1.7.1 {jpg and tif name the jpeg and tiff formats} -body {
+    # Without a handler for the format, the error names the format used.
+    set result {}
+    foreach {name format} {a.jpg jpeg a.JPG jpeg a.tif tiff} {
+	set code [catch {tkcapture::save .t.b.c [file join $dir $name]} message]
+	lappend result [expr {$code == 0
+		|| [string match *\"$format\"* $message]}]
+    }
+    set result
+} -result {1 1 1}
+
+test save-1.8 {capture errors are passed on} -body {
+    set before [lsort [image names]]
+    list [errorInfo {tkcapture::save .t [file join $dir e.png] \
+		-region {5 5 5 5}}] \
+	[errorInfo {tkcapture::save .nope [file join $dir e.png]}] \
+	[errorInfo {tkcapture::save .t [file join $dir e.png] -bogus 1}] \
+	[errorInfo {tkcapture::save .t [file join $dir e.png] -format}] \
+	[file exists [file join $dir e.png]] \
+	[expr {[lsort [image names]] eq $before}]
+} -result {{{capture region is empty} {TK CAPTURE EMPTY_REGION}} {{bad window path name ".nope"} {TK LOOKUP WINDOW .nope}} {{bad option "-bogus": must be -photo, -region, -scale, -update, -menubar, -nocomplain, or -format} {TCL LOOKUP INDEX option -bogus}} {{value for "-format" missing} {TK VALUE_MISSING}} 0 1}
+
+test save-1.9 {-photo keeps the image} -setup {
+    image create photo snap
+} -body {
+    tkcapture::save .t.b.c [file join $dir five.png] -photo snap
+    list [image width snap] [image height snap] [snap get 0 0] \
+	[dict get [snap cget -metadata] capture window]
+} -cleanup {
+    image delete snap
+} -result {40 30 {0 0 255} .t.b.c}
+
+test save-1.10 {unwritable file} -body {
+    set before [lsort [image names]]
+    list [catch {tkcapture::save .t \
+	    [file join $dir no-such-dir sub a.png]}] \
+	[expr {[lsort [image names]] eq $before}]
+} -result {1 1}
+
+test save-1.11 {wrong number of arguments} -body {
+    errorInfo {tkcapture::save .t}
+} -result {{wrong # args: should be "tkcapture::save window fileName ?arg ...?"} {TCL WRONGARGS}}
+
+#
+# png
+#
+
+test png-1.1 {returns PNG data} -body {
+    set data [tkcapture::png .t]
+    list [string range $data 0 7] [expr {[string length $data] > 60}]
+} -result [list "\x89PNG\r\n\x1a\n" 1]
+
+test png-1.2 {the data decodes to the captured pixels} -body {
+    set img [image create photo -data [tkcapture::png .t.b -region {10 0 80 60}]]
+    set ref [tkcapture::capture .t.b -region {10 0 80 60}]
+    list [image width $img] [image height $img] \
+	[expr {[$img data] eq [$ref data]}] [$img get 15 12]
+} -cleanup {
+    image delete $img $ref
+} -result {70 60 1 {0 0 255}}
+
+test png-1.3 {leaves no image behind} -body {
+    set before [lsort [image names]]
+    tkcapture::png .t
+    catch {tkcapture::png .t -region {1 1 1 1}}
+    expr {[lsort [image names]] eq $before}
+} -result 1
+
+test png-1.4 {errors} -body {
+    list [errorInfo {tkcapture::png .nope}] \
+	[errorInfo {tkcapture::png .t -region {1 1 1 1}}] \
+	[errorInfo {tkcapture::png .t -format png}]
+} -result {{{bad window path name ".nope"} {TK LOOKUP WINDOW .nope}} {{capture region is empty} {TK CAPTURE EMPTY_REGION}} {{bad option "-format": must be -photo, -region, -scale, -update, -menubar, or -nocomplain} {TCL LOOKUP INDEX option -format}}}
+
+test png-1.5 {-photo keeps the image} -setup {
+    image create photo snap
+} -body {
+    set data [tkcapture::png .t.b.c -photo snap]
+    list [image width snap] [image height snap] \
+	[expr {$data eq [snap data -format png]}]
+} -cleanup {
+    image delete snap
+} -result {40 30 1}
+
+#
+# layout
+#
+
+test layout-1.1 {geometry of a toplevel} -body {
+    tkcapture::layout .t
+} -result {.t {class Toplevel x 0 y 0 width 200 height 120} .t.a {class Frame x 0 y 0 width 100 height 120} .t.b {class Frame x 100 y 0 width 100 height 120} .t.b.c {class Frame x 120 y 10 width 40 height 30}}
+
+test layout-1.2 {coordinates are relative to the given window} -body {
+    tkcapture::layout .t.b
+} -result {.t.b {class Frame x 0 y 0 width 100 height 120} .t.b.c {class Frame x 20 y 10 width 40 height 30}}
+
+test layout-1.3 {windows that are not viewable are left out} -setup {
+    frame .t.b.hidden -width 5 -height 5
+    frame .t.b.c.shown -width 5 -height 5
+    place .t.b.c.shown -x 1 -y 2
+    update
+} -body {
+    dict keys [tkcapture::layout .t.b]
+} -cleanup {
+    destroy .t.b.hidden .t.b.c.shown
+} -result {.t.b .t.b.c .t.b.c.shown}
+
+test layout-1.4 {other toplevels are left out} -setup {
+    toplevel .t.sub
+    wm geometry .t.sub +300+300
+    frame .t.sub.f -width 20 -height 20
+    pack .t.sub.f
+    update
+} -body {
+    list [dict keys [tkcapture::layout .t]] \
+	[dict keys [tkcapture::layout .t.sub]]
+} -cleanup {
+    destroy .t.sub
+} -result {{.t .t.a .t.b .t.b.c} {.t.sub .t.sub.f}}
+
+test layout-1.5 {siblings are listed in stacking order} -setup {
+    frame .t.x -width 10 -height 10
+    frame .t.y -width 10 -height 10
+    place .t.x -x 0 -y 0
+    place .t.y -x 0 -y 0
+    update
+} -body {
+    set result [list [lrange [dict keys [tkcapture::layout .t]] end-1 end]]
+    raise .t.x
+    update
+    lappend result [lrange [dict keys [tkcapture::layout .t]] end-1 end]
+} -cleanup {
+    destroy .t.x .t.y
+} -result {{.t.x .t.y} {.t.y .t.x}}
+
+test layout-1.6 {a window that is not viewable has an empty layout} -setup {
+    frame .t.hidden
+} -body {
+    tkcapture::layout .t.hidden
+} -cleanup {
+    destroy .t.hidden
+} -result {}
+
+test layout-1.7 {errors} -body {
+    list [errorInfo {tkcapture::layout .nope}] \
+	[errorInfo {tkcapture::layout}]
+} -result {{{bad window path name ".nope"} {TK LOOKUP WINDOW .nope}} {{wrong # args: should be "tkcapture::layout window"} {TCL WRONGARGS}}}
+
+test layout-1.8 {layout rectangles match a capture} -body {
+    set img [tkcapture::capture .t]
+    set result {}
+    dict for {w g} [tkcapture::layout .t] {
+	if {$w eq ".t"} continue
+	dict with g {}
+	lappend result [$img get [expr {$x + $width - 1}] \
+		[expr {$y + $height - 1}]]
+    }
+    set result
+} -cleanup {
+    image delete $img
+} -result {{255 0 0} {0 255 0} {0 0 255}}
+
+#
+# locate
+#
+
+test locate-1.1 {pixels of a toplevel capture} -body {
+    set img [tkcapture::capture .t]
+    list [tkcapture::locate $img 0 0] [tkcapture::locate $img 99 119] \
+	[tkcapture::locate $img 100 0] [tkcapture::locate $img 125 15] \
+	[tkcapture::locate $img 160 40]
+} -cleanup {
+    image delete $img
+} -result {{window .t.a x 0 y 0} {window .t.a x 99 y 119} {window .t.b x 0 y 0} {window .t.b.c x 5 y 5} {window .t.b x 60 y 40}}
+
+test locate-1.2 {pixels of a region capture} -body {
+    set img [tkcapture::capture .t.b.c -region {-30 -5 45 35}]
+    list [tkcapture::locate $img 0 0] [tkcapture::locate $img 9 0] \
+	[tkcapture::locate $img 10 0] [tkcapture::locate $img 30 5] \
+	[tkcapture::locate $img 74 39]
+} -cleanup {
+    image delete $img
+} -result {{window .t.a x 90 y 5} {window .t.a x 99 y 5} {window .t.b x 0 y 5} {window .t.b.c x 0 y 0} {window .t.b x 64 y 44}}
+
+test locate-1.3 {a point outside the toplevel} -body {
+    set img [tkcapture::capture .t.b.c]
+    list [tkcapture::locate $img -500 0] [tkcapture::locate $img 0 500]
+} -cleanup {
+    image delete $img
+} -result {{} {}}
+
+test locate-1.4 {the topmost of overlapping siblings wins} -setup {
+    frame .t.over -background #ffff00 -width 50 -height 50
+    place .t.over -x 90 -y 0
+    raise .t.over
+    update
+} -body {
+    set img [tkcapture::capture .t]
+    set result [list [tkcapture::locate $img 95 5] [$img get 95 5]]
+    lower .t.over
+    update
+    lappend result [tkcapture::locate $img 95 5]
+} -cleanup {
+    image delete $img
+    destroy .t.over
+} -result {{window .t.over x 5 y 5} {255 255 0} {window .t.a x 95 y 5}}
+
+test locate-1.5 {the current geometry is used} -setup {
+    frame .t.moving -background #ffff00 -width 20 -height 20
+    place .t.moving -x 10 -y 10
+    update
+} -body {
+    set img [tkcapture::capture .t.moving]
+    set result [list [tkcapture::locate $img 3 4]]
+    place .t.moving -x 50 -y 60
+    update
+    lappend result [tkcapture::locate $img 3 4]
+} -cleanup {
+    image delete $img
+    destroy .t.moving
+} -result {{window .t.moving x 3 y 4} {window .t.moving x 3 y 4}}
+
+test locate-1.6 {the result drives event generate} -setup {
+    bind .t.b.c <Button-1> {set ::hit [list %W %x %y]}
+} -body {
+    set img [tkcapture::capture .t]
+    set where [tkcapture::locate $img 130 20]
+    set ::hit {}
+    event generate [dict get $where window] <Button-1> \
+	-x [dict get $where x] -y [dict get $where y]
+    set ::hit
+} -cleanup {
+    bind .t.b.c <Button-1> {}
+    image delete $img
+} -result {.t.b.c 10 10}
+
+test locate-1.7 {image without capture metadata} -setup {
+    image create photo plain -width 5 -height 5
+} -body {
+    list [errorInfo {tkcapture::locate plain 1 1}] \
+	[errorInfo {tkcapture::locate nosuchimage 1 1}]
+} -cleanup {
+    image delete plain
+} -result {{{image "plain" has no capture metadata} {TK CAPTURE NO_METADATA}} {{image "nosuchimage" has no capture metadata} {TK CAPTURE NO_METADATA}}}
+
+test locate-1.8 {bad coordinates} -body {
+    set img [tkcapture::capture .t]
+    list [errorInfo {tkcapture::locate $img 1.5 2}] \
+	[errorInfo {tkcapture::locate $img 1 two}]
+} -cleanup {
+    image delete $img
+} -result {{{expected integer pixel coordinates but got "1.5 2"} {TCL VALUE NUMBER}} {{expected integer pixel coordinates but got "1 two"} {TCL VALUE NUMBER}}}
+
+test locate-1.9 {the captured window no longer exists} -setup {
+    frame .t.temp -width 10 -height 10
+    place .t.temp -x 0 -y 0
+    update
+} -body {
+    set img [tkcapture::capture .t.temp]
+    destroy .t.temp
+    errorInfo {tkcapture::locate $img 1 1}
+} -cleanup {
+    image delete $img
+} -result {{bad window path name ".t.temp"} {TK LOOKUP WINDOW .t.temp}}
+
+test locate-1.10 {metadata survives a copy to another photo} -body {
+    set img [tkcapture::capture .t]
+    set copy [image create photo -metadata [$img cget -metadata]]
+    $copy copy $img
+    tkcapture::locate $copy 125 15
+} -cleanup {
+    image delete $img $copy
+} -result {window .t.b.c x 5 y 5}
+
+destroy .t
+removeDirectory tkcapture-helpers
+cleanupTests
+return
