@@ -1,7 +1,7 @@
 /*
  * tkCapture.c --
  *
- *	Generic part of the tkcapture extension: the ::tkcapture::_grab
+ *	Generic part of the tkcapture extension: the ::tkcapture::_capture
  *	command, which captures a rectangle of a Tk window into a photo
  *	image, and the package initialization. The public commands are
  *	defined in library/tkcapture.tcl on top of this primitive.
@@ -37,6 +37,7 @@ static const Tcl_Config configuration[] = {
  * Forward declarations for functions defined in this file.
  */
 
+static Tcl_ObjCmdProc2	CaptureObjCmd;
 static void		DictPut(Tcl_Obj *dictObj, const char *key,
 			    Tcl_Obj *valueObj);
 static Tcl_ObjCmdProc2	ExposeObjCmd;
@@ -46,7 +47,6 @@ static Tk_Window	GetViewableToplevel(Tk_Window tkwin);
 static int		GetVisibleArea(Tk_Window top, int *areaPtr);
 static void		GetWindowOffset(Tk_Window tkwin, Tk_Window top,
 			    int *xPtr, int *yPtr);
-static Tcl_ObjCmdProc2	GrabObjCmd;
 static int		Init(Tcl_Interp *interp);
 static int		IsEmpty(const TkCaptureBuffer *bufPtr);
 static int		ReplacePhoto(Tcl_Interp *interp,
@@ -593,11 +593,11 @@ ExposeObjCmd(
 /*
  *----------------------------------------------------------------------
  *
- * GrabObjCmd --
+ * CaptureObjCmd --
  *
- *	Implements ::tkcapture::_grab:
+ *	Implements ::tkcapture::_capture:
  *
- *	    _grab window photo region scale menubar nocomplain
+ *	    _capture window photo region scale menubar nocomplain
  *
  *	Stores in the photo image the pixels that the toplevel of window
  *	displays in region, a list {x1 y1 x2 y2} in window's coordinates
@@ -630,7 +630,7 @@ ExposeObjCmd(
  */
 
 static int
-GrabObjCmd(
+CaptureObjCmd(
     void *dummy,		/* Not used. */
     Tcl_Interp *interp,		/* Current interpreter. */
     Tcl_Size objc,		/* Number of arguments. */
@@ -751,7 +751,7 @@ GrabObjCmd(
 		"capture region is empty");
     }
 
-    if (TkCapturePlatformGrab(interp, top, (int) x1, (int) y1,
+    if (TkCapturePlatformRead(interp, top, (int) x1, (int) y1,
 	    (int) (x2 - x1), (int) (y2 - y1), flags, &buf) != TCL_OK) {
 	return TCL_ERROR;
     }
@@ -788,7 +788,7 @@ GrabObjCmd(
  *
  * Init --
  *
- *	Creates ::tkcapture::_grab, ::tkcapture::_expose,
+ *	Creates ::tkcapture::_capture, ::tkcapture::_expose,
  *	::tkcapture::pkgconfig and the variable ::tkcapture::version in an
  *	interpreter. The package itself is provided by
  *	library/tkcapture.tcl, which the package index sources after
@@ -821,8 +821,8 @@ Init(
 	    TCL_LEAVE_ERR_MSG) == NULL) {
 	return TCL_ERROR;
     }
-    Tcl_CreateObjCommand2(interp, "::tkcapture::_grab", GrabObjCmd, NULL,
-	    NULL);
+    Tcl_CreateObjCommand2(interp, "::tkcapture::_capture", CaptureObjCmd,
+	    NULL, NULL);
     Tcl_CreateObjCommand2(interp, "::tkcapture::_expose", ExposeObjCmd,
 	    NULL, NULL);
     Tcl_RegisterConfig(interp, "tkcapture", configuration, "utf-8");
@@ -836,7 +836,7 @@ Init(
  *
  *	Entry points of the shared library for trusted and for safe
  *	interpreters. Both provide the same command, which restricts
- *	itself in a safe interpreter (see GrabObjCmd).
+ *	itself in a safe interpreter (see CaptureObjCmd).
  *
  * Results:
  *	A standard Tcl result.

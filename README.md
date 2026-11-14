@@ -215,7 +215,7 @@ from another program: `: | tclsh script.tcl`.
 ## Layout
 
 ```
-generic/tkCapture.c          the _grab command: region arithmetic, photo output
+generic/tkCapture.c          the _capture command: region arithmetic, photo output
 generic/tkCapture.h          capture buffer and the platform hooks
 generic/tkCaptureConvert.c   XImage to RGBA for every kind of X visual
 unix/tkCaptureX11.c          X11 backend

@@ -2,7 +2,7 @@
 #
 #	Script part of the tkcapture package: capture of Tk windows,
 #	widgets and regions into photo images. The pixels are read by
-#	::tkcapture::_grab, which is implemented in C; this file is sourced
+#	::tkcapture::_capture, which is implemented in C; this file is sourced
 #	by the package index after the shared library has been loaded.
 #
 #	The package can be used in a safe interpreter with Safe Tk. There
@@ -18,7 +18,7 @@ namespace eval ::tkcapture {
 
     variable version
     if {![info exists version]
-	    || [namespace which -command _grab] eq ""} {
+	    || [namespace which -command _capture] eq ""} {
 	return -code error "the tkcapture shared library is not loaded"
     }
 
@@ -146,10 +146,10 @@ proc ::tkcapture::capture {window args} {
     if {$created} {
 	set photo [image create photo]
     }
-    set grab [list _grab $window $photo [dict get $opts -region] $scale \
-	    [dict get $opts -menubar] [dict get $opts -nocomplain]]
+    set captureCmd [list _capture $window $photo [dict get $opts -region] \
+	    $scale [dict get $opts -menubar] [dict get $opts -nocomplain]]
     try {
-	set info [{*}$grab]
+	set info [{*}$captureCmd]
 	# Reading the pixels can make the system ask for parts that were
 	# never drawn (on Windows, those that were off screen when the
 	# window was shown). They are drawn and read again.
@@ -159,7 +159,7 @@ proc ::tkcapture::capture {window args} {
 		throw [list TK LOOKUP WINDOW $window] \
 		    "bad window path name \"$window\""
 	    }
-	    set info [{*}$grab]
+	    set info [{*}$captureCmd]
 	}
 	set capture [dict merge \
 		[dict create window $window toplevel $top] $info \

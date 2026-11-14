@@ -23,17 +23,17 @@
  * Forward declarations for functions defined in this file.
  */
 
+static int		CaptureFromBacking(Tcl_Interp *interp,
+			    CGContextRef backing, CGFloat backingScale,
+			    int x, int y, int width, int height, int flags,
+			    TkCaptureBuffer *bufPtr);
+static int		CaptureWithXGetImage(Tcl_Interp *interp, Tk_Window top,
+			    int x, int y, int width, int height,
+			    TkCaptureBuffer *bufPtr);
 static CGContextRef	GetBackingContext(Tcl_Interp *interp, NSView *view,
 			    int *hasBackingPtr);
 static void		GetViewOffset(Tk_Window top, NSWindow *window,
 			    int *xPtr, int *yPtr);
-static int		GrabFromBacking(Tcl_Interp *interp,
-			    CGContextRef backing, CGFloat backingScale,
-			    int x, int y, int width, int height, int flags,
-			    TkCaptureBuffer *bufPtr);
-static int		GrabWithXGetImage(Tcl_Interp *interp, Tk_Window top,
-			    int x, int y, int width, int height,
-			    TkCaptureBuffer *bufPtr);
 static int		MaskShift(unsigned long mask);
 
 /*
@@ -166,7 +166,7 @@ GetViewOffset(
 /*
  *----------------------------------------------------------------------
  *
- * GrabFromBacking --
+ * CaptureFromBacking --
  *
  *	Copies a rectangle, given in Tk pixels relative to the upper left
  *	corner of a content view, out of the view's backing bitmap,
@@ -182,7 +182,7 @@ GetViewOffset(
  */
 
 static int
-GrabFromBacking(
+CaptureFromBacking(
     Tcl_Interp *interp,		/* For error reporting. */
     CGContextRef backing,	/* Backing bitmap of the content view. */
     CGFloat backingScale,	/* Backing pixels per Tk pixel. */
@@ -290,7 +290,7 @@ MaskShift(
 /*
  *----------------------------------------------------------------------
  *
- * GrabWithXGetImage --
+ * CaptureWithXGetImage --
  *
  *	Reads a rectangle of a toplevel through Tk's emulation of
  *	XGetImage, which delivers one pixel per Tk pixel in the color
@@ -306,7 +306,7 @@ MaskShift(
  */
 
 static int
-GrabWithXGetImage(
+CaptureWithXGetImage(
     Tcl_Interp *interp,		/* For error reporting. */
     Tk_Window top,		/* A mapped toplevel. */
     int x, int y,		/* Upper left corner of the rectangle,
@@ -375,7 +375,7 @@ GrabWithXGetImage(
 /*
  *----------------------------------------------------------------------
  *
- * TkCapturePlatformGrab --
+ * TkCapturePlatformRead --
  *
  *	See tkCapture.h.
  *
@@ -383,7 +383,7 @@ GrabWithXGetImage(
  */
 
 int
-TkCapturePlatformGrab(
+TkCapturePlatformRead(
     Tcl_Interp *interp,		/* For error reporting. */
     Tk_Window top,		/* A mapped toplevel. */
     int x, int y,		/* Upper left corner of the rectangle,
@@ -411,7 +411,7 @@ TkCapturePlatformGrab(
     view = [window contentView];
     backing = GetBackingContext(interp, view, &hasBacking);
     if (!hasBacking) {
-	return GrabWithXGetImage(interp, top, x, y, width, height, bufPtr);
+	return CaptureWithXGetImage(interp, top, x, y, width, height, bufPtr);
     }
 
     /*
@@ -445,7 +445,7 @@ TkCapturePlatformGrab(
 	return TCL_OK;
     }
     GetViewOffset(top, window, &offsetX, &offsetY);
-    return GrabFromBacking(interp, backing, backingScale, x + offsetX,
+    return CaptureFromBacking(interp, backing, backingScale, x + offsetX,
 	    y + offsetY, width, height, flags, bufPtr);
 }
 

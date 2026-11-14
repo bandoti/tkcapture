@@ -136,7 +136,7 @@ test safe-1.2 {all commands but save exist} -body {
 	    namespace tail $c
 	}]] [lsort [namespace eval ::tkcapture {namespace export}]]
     }
-} -result {{CheckWindow ParseOptions _expose _grab capture layout locate pkgconfig png} {capture layout locate png}}
+} -result {{CheckWindow ParseOptions _capture _expose capture layout locate pkgconfig png} {capture layout locate png}}
 
 test safe-1.3 {save is not available} -body {
     $child eval {

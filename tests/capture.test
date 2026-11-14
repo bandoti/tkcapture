@@ -1,6 +1,6 @@
 # capture.test --
 #
-#	Tests for tkcapture::capture and the ::tkcapture::_grab primitive.
+#	Tests for tkcapture::capture and the ::tkcapture::_capture primitive.
 #
 # Copyright © 2026 Bandoti Ltd.
 #
@@ -289,17 +289,17 @@ test capture-1.20 {a later option overrides an earlier one} -body {
     image delete $img
 } -result {20 5}
 
-test capture-1.21 {_grab: wrong number of arguments} -body {
-    errorInfo {tkcapture::_grab .t}
-} -result {{wrong # args: should be "tkcapture::_grab window photo region scale menubar nocomplain"} {TCL WRONGARGS}}
+test capture-1.21 {_capture: wrong number of arguments} -body {
+    errorInfo {tkcapture::_capture .t}
+} -result {{wrong # args: should be "tkcapture::_capture window photo region scale menubar nocomplain"} {TCL WRONGARGS}}
 
-test capture-1.22 {_grab: argument validation} -setup {
+test capture-1.22 {_capture: argument validation} -setup {
     image create photo p
 } -body {
-    list [errorInfo {tkcapture::_grab .nope p {} logical 0 0}] \
-	[errorInfo {tkcapture::_grab .t p {} tiny 0 0}] \
-	[errorInfo {tkcapture::_grab .t p {} logical perhaps 0}] \
-	[errorInfo {tkcapture::_grab .t p {} logical 0 perhaps}]
+    list [errorInfo {tkcapture::_capture .nope p {} logical 0 0}] \
+	[errorInfo {tkcapture::_capture .t p {} tiny 0 0}] \
+	[errorInfo {tkcapture::_capture .t p {} logical perhaps 0}] \
+	[errorInfo {tkcapture::_capture .t p {} logical 0 perhaps}]
 } -cleanup {
     image delete p
 } -result {{{bad window path name ".nope"} {TK LOOKUP WINDOW .nope}} {{bad scale "tiny": must be logical or device} {TCL LOOKUP INDEX scale tiny}} {{expected boolean value but got "perhaps"} {TCL VALUE NUMBER}} {{expected boolean value but got "perhaps"} {TCL VALUE NUMBER}}}

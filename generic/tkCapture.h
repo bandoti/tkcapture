@@ -55,7 +55,7 @@ typedef struct TkCaptureBuffer {
  * menubar shown directly above the client area of the toplevel 'top', or
  * 0 if there is none that can be captured.
  *
- * TkCapturePlatformGrab captures the rectangle (x, y, width, height),
+ * TkCapturePlatformRead captures the rectangle (x, y, width, height),
  * given in Tk pixels relative to the client origin of the mapped
  * toplevel 'top'. The rectangle is not empty and lies inside the client
  * area, extended upwards by the menubar height when TKCAPTURE_MENUBAR is
@@ -74,7 +74,7 @@ typedef struct TkCaptureBuffer {
 
 MODULE_SCOPE int	TkCapturePlatformMenubarHeight(Tk_Window top);
 MODULE_SCOPE int	TkCapturePlatformExpose(Tk_Window top);
-MODULE_SCOPE int	TkCapturePlatformGrab(Tcl_Interp *interp,
+MODULE_SCOPE int	TkCapturePlatformRead(Tcl_Interp *interp,
 			    Tk_Window top, int x, int y, int width,
 			    int height, int flags, TkCaptureBuffer *bufPtr);
 

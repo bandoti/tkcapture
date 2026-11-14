@@ -457,7 +457,7 @@ TkCapturePlatformMenubarHeight(
 /*
  *----------------------------------------------------------------------
  *
- * TkCapturePlatformGrab --
+ * TkCapturePlatformRead --
  *
  *	See tkCapture.h.
  *
@@ -465,7 +465,7 @@ TkCapturePlatformMenubarHeight(
  */
 
 int
-TkCapturePlatformGrab(
+TkCapturePlatformRead(
     Tcl_Interp *interp,		/* For error reporting. */
     Tk_Window top,		/* A mapped toplevel. */
     int x, int y,		/* Upper left corner of the rectangle,
