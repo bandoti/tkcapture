@@ -209,8 +209,8 @@ ConvertTrueColor(
  *	(one index per pixel) and DirectColor (one index per channel).
  *
  * Results:
- *	TCL_OK, or TCL_ERROR with a message in interp if the colormap is
- *	too large to be read.
+ *	TCL_OK, or TCL_ERROR with a message in interp if the visual
+ *	declares no colormap entries or too many to be read.
  *
  * Side effects:
  *	Queries the colormap from the X server. Writes imagePtr->width x
@@ -225,7 +225,7 @@ ConvertMapped(
     Display *display,		/* Display of the colormap. */
     XImage *imagePtr,		/* Source image. */
     Visual *visual,		/* Visual the image was read from. */
-    Colormap colormap,		/* Colormap of the window. */
+    Colormap colormap,		/* Colormap of the source drawable. */
     unsigned char *dst,		/* First destination pixel. */
     int pitch)			/* Bytes per destination row. */
 {

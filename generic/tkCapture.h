@@ -65,11 +65,13 @@ typedef struct TkCaptureBuffer {
  * failure it returns TCL_ERROR with a message and an error code in
  * interp, and *bufPtr holds no allocated pixels.
  *
- * TkCapturePlatformExpose delivers the Expose events that captures in
- * the current thread have caused and the event loop has not delivered
- * yet: rendering a toplevel can make the windowing system ask its
- * windows to repaint. 'top' is the mapped toplevel about to be captured
- * again. It returns the number of events delivered.
+ * TkCapturePlatformExpose deals with the repaint requests that the last
+ * capture in the current thread caused: rendering a toplevel can make
+ * the windowing system ask its windows to repaint, and Tk answers with
+ * Expose events that only the event loop would deliver. The function
+ * makes an equivalent Expose event for each request and has Tk handle
+ * it at once. 'top' is the mapped toplevel about to be captured again.
+ * It returns the number of events handled.
  */
 
 MODULE_SCOPE int	TkCapturePlatformMenubarHeight(Tk_Window top);

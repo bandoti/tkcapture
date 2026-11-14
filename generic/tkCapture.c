@@ -1,10 +1,12 @@
 /*
  * tkCapture.c --
  *
- *	Generic part of the tkcapture extension: the ::tkcapture::_capture
- *	command, which captures a rectangle of a Tk window into a photo
- *	image, and the package initialization. The public commands are
- *	defined in library/tkcapture.tcl on top of this primitive.
+ *	Generic part of the tkcapture extension: the package
+ *	initialization and the C commands ::tkcapture::_capture, which
+ *	captures a rectangle of a Tk window into a photo image, and
+ *	::tkcapture::_expose, which has the repaint requests that a
+ *	capture caused handled. The public commands are defined in
+ *	library/tkcapture.tcl on top of them.
  *
  * Copyright © 2026 Bandoti Ltd.
  *
@@ -543,15 +545,14 @@ DictPut(
  *
  *	    _expose window
  *
- *	Delivers the Expose events that capturing has caused, so that the
- *	areas the windowing system asked for are redrawn by the next idle
- *	callbacks, without running the event loop. window is the window
- *	about to be captured again.
+ *	Has Tk handle an Expose event for each repaint request that the
+ *	last capture caused, so that the areas the windowing system asked
+ *	for are redrawn by the next idle callbacks, without running the
+ *	event loop. window is the window about to be captured again.
  *
  * Results:
  *	A standard Tcl result. On success the interpreter result is the
- *	number of Expose events delivered; 0 if the window is not
- *	viewable.
+ *	number of Expose events handled; 0 if the window is not viewable.
  *
  * Side effects:
  *	Expose bindings may run.
@@ -604,7 +605,8 @@ ExposeObjCmd(
  *	with an exclusive lower right corner. An empty region stands for
  *	the whole window. The region is clipped to the visible part of
  *	the client area of the toplevel, which is extended upwards by the
- *	menubar if menubar is true (window must be a toplevel then). It
+ *	menubar if menubar is true (window must be a toplevel then; a
+ *	safe interpreter ignores menubar, as it has no menus). It
  *	is an error if no pixel at all could be read, unless nocomplain
  *	is true. The command neither creates images nor enters the event
  *	loop.
@@ -835,7 +837,7 @@ Init(
  * Tkcapture_Init, Tkcapture_SafeInit --
  *
  *	Entry points of the shared library for trusted and for safe
- *	interpreters. Both provide the same command, which restricts
+ *	interpreters. Both create the same commands; _capture restricts
  *	itself in a safe interpreter (see CaptureObjCmd).
  *
  * Results:

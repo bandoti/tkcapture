@@ -26,8 +26,8 @@
 /*
  * Paint requests made while PrintWindow renders a toplevel, recorded by
  * RecordPaint, one list per thread. Tk answers each with a queued Expose
- * event, which TkCapturePlatformExpose delivers without waiting for the
- * event loop.
+ * event; TkCapturePlatformExpose has Tk handle an equivalent event at
+ * once instead of waiting for the event loop.
  */
 
 typedef struct PaintRecord {
@@ -188,9 +188,10 @@ RecordPaint(
  *	See tkCapture.h. PrintWindow asks the windows of a toplevel to
  *	paint what they have not painted since they were shown, such as
  *	parts that were off screen. Tk answers by queueing Expose events,
- *	which only the event loop would deliver; they are delivered here
- *	instead, so that nothing else in the event queue is processed. The
- *	queued events arrive later and cause redundant redraws only.
+ *	which only the event loop would deliver. Here an equivalent event
+ *	is made from each recorded request and handled at once, so that
+ *	nothing else in the event queue is processed. The queued events
+ *	arrive later and cause redundant redraws only.
  *
  *----------------------------------------------------------------------
  */
@@ -292,8 +293,9 @@ TkCapturePlatformMenubarHeight(
  *	above the client window, or above one of its ancestors inside the
  *	frame window, covers. Such a window is part of the rendered frame,
  *	and may be a widget of an application that embeds the toplevel.
- *	Windows stacked above the frame are not: the rendering leaves them
- *	out.
+ *	Windows stacked above the frame are not: PrintWindow leaves them
+ *	out. The copy from the screen that RenderFrame falls back to does
+ *	include them, and they are not masked.
  *
  * Results:
  *	None.

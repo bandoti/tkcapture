@@ -1,7 +1,7 @@
 # -*- tcl -*-
 # Tcl package index file for tkcapture.
 #
-# The shared library provides the C primitive; tkcapture.tcl defines the
+# The shared library provides the C commands; tkcapture.tcl defines the
 # public commands and provides the package.
 #
 # Copyright © 2026 Bandoti Ltd.
