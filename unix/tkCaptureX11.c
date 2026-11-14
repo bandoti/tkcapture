@@ -223,8 +223,7 @@ GetFramePixmap(
     Display *display,		/* Display of the window. */
     Window source,		/* The toplevel's window or its wrapper. */
     Window *framePtr,		/* Receives the child of the root. */
-    XWindowAttributes *attrsPtr,
-				/* Receives the attributes of the child. */
+    XWindowAttributes *attrsPtr,	/* Receives the child's attributes. */
     int *xPtr, int *yPtr)	/* Receive the position of source. */
 {
     Window frame = source, root, parent, child, *children;

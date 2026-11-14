@@ -436,8 +436,7 @@ GetVisibleArea(
 
 static int
 IsEmpty(
-    const TkCaptureBuffer *bufPtr)
-				/* Buffer to examine. */
+    const TkCaptureBuffer *bufPtr)	/* Buffer to examine. */
 {
     int x, y;
 
@@ -479,8 +478,7 @@ static int
 ReplacePhoto(
     Tcl_Interp *interp,		/* For error reporting. */
     Tk_PhotoHandle photo,	/* Image to overwrite. */
-    const TkCaptureBuffer *bufPtr)
-				/* Pixels to store. */
+    const TkCaptureBuffer *bufPtr)	/* Pixels to store. */
 {
     Tk_PhotoImageBlock block;
 
