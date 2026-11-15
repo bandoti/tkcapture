@@ -17,6 +17,20 @@ TEA_LOAD_TCLCONFIG
 TEA_PATH_TKCONFIG
 TEA_LOAD_TKCONFIG
 
+#--------------------------------------------------------------------
+# Tk built in its macosx directory defines MAC_OSX_TK in tkConfig.h
+# rather than TK_DEFS, so TEA takes it for X11; --enable-aqua says so.
+#--------------------------------------------------------------------
+
+AC_ARG_ENABLE(aqua,
+    AS_HELP_STRING([--enable-aqua],
+	[build for Aqua Tk where TEA detects X11 (default: no)]),
+    [enable_aqua=$enableval], [enable_aqua=no])
+if test "$enable_aqua" = yes -a "${TEA_WINDOWINGSYSTEM}" = x11; then
+    AC_DEFINE(MAC_OSX_TK, 1, [Are we building against Mac OS X TkAqua?])
+    TEA_WINDOWINGSYSTEM=aqua
+fi
+
 TEA_PREFIX
 TEA_SETUP_COMPILER
 

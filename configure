@@ -780,6 +780,7 @@ enable_option_checking
 with_tcl
 with_tcl8
 with_tk
+enable_aqua
 with_tclinclude
 with_tkinclude
 with_x
@@ -1426,6 +1427,8 @@ Optional Features:
   --disable-option-checking  ignore unrecognized --enable/--with options
   --disable-FEATURE       do not include FEATURE (same as --enable-FEATURE=no)
   --enable-FEATURE[=ARG]  include FEATURE [ARG=yes]
+  --enable-aqua           build for Aqua Tk where TEA detects X11 (default:
+                          no)
   --enable-xcomposite     read toplevels through the X Composite extension
                           (default: yes, if available)
   --enable-threads        build with threads (default: on)
@@ -4216,6 +4219,26 @@ printf "%s\n" "#define MAC_OSX_TK 1" >>confdefs.h
 
 
 
+
+#--------------------------------------------------------------------
+# Tk built in its macosx directory defines MAC_OSX_TK in tkConfig.h
+# rather than TK_DEFS, so TEA takes it for X11; --enable-aqua says so.
+#--------------------------------------------------------------------
+
+# Check whether --enable-aqua was given.
+if test ${enable_aqua+y}
+then :
+  enableval=$enable_aqua; enable_aqua=$enableval
+else $as_nop
+  enable_aqua=no
+fi
+
+if test "$enable_aqua" = yes -a "${TEA_WINDOWINGSYSTEM}" = x11; then
+
+printf "%s\n" "#define MAC_OSX_TK 1" >>confdefs.h
+
+    TEA_WINDOWINGSYSTEM=aqua
+fi
 
 
     if test "${prefix}" = "NONE"; then
